@@ -1,58 +1,306 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Integração WebPosto
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+API em Laravel para integração com o WebPosto. O ambiente local utiliza Docker Compose com dois serviços:
 
-## About Laravel
+- `app`: Laravel 13 com PHP 8.3, disponível na porta `8000`.
+- `db`: MySQL 8.4, disponível para ferramentas externas na porta `3307`.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+Os containers se comunicam pela rede interna do Docker. Por isso, o Laravel acessa o banco usando `db:3306`, enquanto DBeaver e outras ferramentas instaladas no host usam `localhost:3307`.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Requisitos
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+- Docker Engine;
+- Docker Compose v2;
+- Git.
 
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+Confira a instalação:
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+docker version
+docker compose version
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Não é necessário instalar PHP, Composer ou MySQL diretamente na máquina.
 
-## Contributing
+## Configuração inicial
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Clone o projeto, entre na pasta e crie o arquivo de ambiente:
 
-## Code of Conduct
+```bash
+cp .env.example .env
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+Edite o `.env` e configure ao menos:
 
-## Security Vulnerabilities
+```env
+APP_URL=http://localhost:8000
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+DB_CONNECTION=mysql
+DB_HOST=db
+DB_PORT=3306
+DB_DATABASE=integracao_v1
+DB_USERNAME=integracao
+DB_PASSWORD=troque_esta_senha
+DB_ROOT_PASSWORD=troque_a_senha_root
 
-## License
+TMP_API_TOKEN=adicione_um_token_seguro
+WEBPOSTO_API_KEY=adicione_a_key_do_webposto
+```
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+Gere um Bearer Token aleatório com:
+
+```bash
+openssl rand -hex 32
+```
+
+Coloque o resultado em `TMP_API_TOKEN`. Nunca inclua tokens, senhas ou a key real do WebPosto no Git. O arquivo `.env` já está listado no `.gitignore`.
+
+## Subindo o ambiente
+
+Construa e inicie os containers:
+
+```bash
+docker compose up --build -d
+```
+
+Na primeira inicialização, o container da aplicação executa automaticamente:
+
+1. `composer install`;
+2. migrations do Laravel;
+3. seeder do banco;
+4. servidor HTTP com múltiplos workers.
+
+Gere a chave da aplicação caso `APP_KEY` ainda esteja vazia:
+
+```bash
+docker compose exec app php artisan key:generate
+```
+
+Reinicie a aplicação para que todos os workers carreguem a chave gerada:
+
+```bash
+docker compose restart app
+```
+
+Aguarde até o log informar que o servidor PHP iniciou:
+
+```bash
+docker compose logs -f app
+```
+
+Use `Ctrl+C` para sair da visualização dos logs; isso não encerra os containers.
+
+Confira os containers:
+
+```bash
+docker compose ps
+```
+
+A aplicação estará disponível em:
+
+```text
+http://localhost:8000
+```
+
+## Banco de dados
+
+O MySQL cria automaticamente a base configurada em `DB_DATABASE`. As migrations criam as tabelas da aplicação, incluindo `api_tokens`.
+
+O `DatabaseSeeder` lê `TMP_API_TOKEN` do `.env` e cria ou atualiza o registro ativo chamado `integracao_webposto`. O token não fica escrito no código ou na migration.
+
+Valide a conexão por dentro do container:
+
+```bash
+docker compose exec app php artisan db:show
+```
+
+Consulte os tokens sem exibir seu conteúdo:
+
+```bash
+docker compose exec app php artisan tinker --execute="dump(DB::table('api_tokens')->select('id', 'nome', 'ativo')->get());"
+```
+
+### Conexão pelo DBeaver
+
+Use uma conexão MySQL com os seguintes dados:
+
+| Campo | Valor local |
+|---|---|
+| Host | `localhost` |
+| Porta | `3307` |
+| Database | `integracao_v1` |
+| Usuário | valor de `DB_USERNAME` |
+| Senha | valor de `DB_PASSWORD` |
+
+URL JDBC:
+
+```text
+jdbc:mysql://localhost:3307/integracao_v1?allowPublicKeyRetrieval=true&useSSL=false&sslMode=DISABLED
+```
+
+Se o DBeaver mostrar `Public Key Retrieval is not allowed`, abra **Driver properties** e configure:
+
+```text
+allowPublicKeyRetrieval=true
+sslMode=DISABLED
+useSSL=false
+```
+
+Essas opções são destinadas somente ao ambiente local. Em produção, configure TLS e não exponha publicamente a porta do MySQL.
+
+## Autenticação da API
+
+As chamadas autenticadas enviam o token no header HTTP:
+
+```http
+Authorization: Bearer SEU_TOKEN
+Accept: application/json
+```
+
+Há dois mecanismos temporários durante o desenvolvimento:
+
+- `auth.token`: compara o Bearer Token com `TMP_API_TOKEN`.
+- `auth.database-token`: consulta a tabela `api_tokens` e exige que o registro esteja ativo.
+
+O mecanismo baseado em banco retorna:
+
+- `200 OK`: token válido e ativo;
+- `401 Unauthorized`: token ausente, inválido ou inativo;
+- `503 Service Unavailable`: banco indisponível.
+
+## Rotas de diagnóstico
+
+### Teste da aplicação e do banco
+
+```http
+GET /api/teste
+```
+
+Exemplo:
+
+```bash
+curl --max-time 10 \
+  -H "Authorization: Bearer SEU_TOKEN" \
+  -H "Accept: application/json" \
+  http://localhost:8000/api/teste
+```
+
+A resposta informa o estado da requisição e da conexão MySQL, sem expor credenciais.
+
+### Verificação do token no banco
+
+```http
+GET /api/verificar-token
+```
+
+Exemplo:
+
+```bash
+curl --max-time 10 \
+  -H "Authorization: Bearer SEU_TOKEN" \
+  -H "Accept: application/json" \
+  http://localhost:8000/api/verificar-token
+```
+
+Resposta esperada:
+
+```json
+{
+  "status": true,
+  "token_status": "valid",
+  "authenticated": true,
+  "token": {
+    "id": 1,
+    "name": "integracao_webposto"
+  },
+  "verified_at": "2026-08-18T15:24:54+00:00"
+}
+```
+
+O valor completo do token nunca é devolvido pela API.
+
+## Validação da instalação
+
+Depois da configuração inicial, execute estas verificações.
+
+Os dois serviços devem aparecer como ativos e o banco deve estar saudável:
+
+```bash
+docker compose ps
+```
+
+Confira a conexão Laravel/MySQL:
+
+```bash
+docker compose exec app php artisan db:show
+```
+
+Confira a rota autenticada pelo token salvo no banco:
+
+```bash
+curl --fail --max-time 10 \
+  -H "Authorization: Bearer SEU_TOKEN" \
+  -H "Accept: application/json" \
+  http://localhost:8000/api/verificar-token
+```
+
+A instalação está pronta quando a chamada retorna HTTP `200` com `"token_status":"valid"`.
+
+Se a aplicação ainda estiver inicializando, acompanhe:
+
+```bash
+docker compose logs --tail=100 app db
+```
+
+## Comandos úteis
+
+Recriar somente a aplicação após alterar o Compose:
+
+```bash
+docker compose up -d --force-recreate app
+```
+
+Reconstruir a imagem após alterar o Dockerfile:
+
+```bash
+docker compose build app
+docker compose up -d --force-recreate app
+```
+
+Executar os testes:
+
+```bash
+docker compose exec app php artisan test
+```
+
+Parar os containers sem apagar o banco:
+
+```bash
+docker compose down
+```
+
+Ver as últimas linhas de log:
+
+```bash
+docker compose logs --tail=100 app db
+```
+
+> Não execute `docker compose down -v` se quiser preservar os dados. A opção `-v` remove os volumes, incluindo o volume do MySQL.
+
+## Integração com o WebPosto
+
+A chave fornecida pelo WebPosto deve ser definida somente no `.env`:
+
+```env
+WEBPOSTO_API_KEY=sua_key_real
+```
+
+Ela é disponibilizada à aplicação por `config/integration.php`. Os endpoints e serviços responsáveis pelas chamadas ao WebPosto serão implementados nas próximas etapas.
+
+## Segurança
+
+- Não versione `.env` ou arquivos de backup contendo segredos.
+- Troque as senhas de exemplo antes de publicar ou implantar o projeto.
+- Não registre Bearer Tokens ou a key do WebPosto nos logs.
+- O armazenamento atual do token em texto é temporário. Antes da produção, migre para hash criptográfico e implemente rotação e expiração.
+- Não exponha a porta `3307` em produção; mantenha o MySQL acessível apenas pela rede interna.
