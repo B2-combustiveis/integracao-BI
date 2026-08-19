@@ -1,0 +1,736 @@
+openapi: 3.0.3
+info:
+  title: Integração API
+  version: 1.0.0
+  description: |
+    API intermediária para autenticação, diagnóstico e comunicação com serviços externos.
+    Informe o Bearer Token da API no botão **Authorize** antes de usar **Try it out**.
+servers:
+  - url: /
+    description: Servidor atual
+tags:
+  - name: Diagnóstico
+  - name: Autenticação
+  - name: WebPosto
+paths:
+  /api/teste:
+    get:
+      tags: [Diagnóstico]
+      summary: Testa a aplicação e a conexão principal com o banco
+      operationId: testarConexao
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Relatório de conexão
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionReport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/verificar-token:
+    get:
+      tags: [Autenticação]
+      summary: Valida o Bearer Token na tabela api_tokens
+      operationId: verificarToken
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Token válido e ativo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenVerification'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Banco de dados indisponível
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/webposto/empresas:
+    get:
+      tags: [WebPosto]
+      summary: Consulta as empresas no WebPosto
+      description: Consulta `/INTEGRACAO/EMPRESAS`, sincroniza o retorno bruto em `webposto.empresas` e os dados normalizados em `bi.dim_empresas`.
+      operationId: consultarEmpresasWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: empresa_codigo
+          in: query
+          required: true
+          description: Empresa cuja credencial será usada na consulta ao WebPosto.
+          schema:
+            type: integer
+            minimum: 1
+            example: 4604
+      responses:
+        '200':
+          description: Resposta obtida com sucesso no WebPosto
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebPostoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Código da empresa ausente ou inválido
+        '502':
+          description: O WebPosto respondeu com erro
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebPostoResponse'
+        '503':
+          description: Integração ou banco não configurado/disponível
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '504':
+          description: Timeout ou falha de conexão com o WebPosto
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/webposto/produto-grupos:
+    get:
+      tags: [WebPosto]
+      summary: Consulta e sincroniza grupos de produtos
+      description: Consulta `/INTEGRACAO/GRUPO` e sincroniza a resposta bruta em `webposto.produto_grupos`, no contexto da empresa cuja credencial foi utilizada.
+      operationId: consultarProdutoGruposWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: empresa_codigo
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            example: 4604
+      responses:
+        '200':
+          description: Grupos consultados e sincronizados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProdutoGrupoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Código da empresa ausente ou inválido
+        '502':
+          description: O Web Posto respondeu com erro
+        '503':
+          description: Credencial não configurada
+        '504':
+          description: Timeout ou falha de conexão com o Web Posto
+  /api/webposto/produto-subgrupos:
+    get:
+      tags: [WebPosto]
+      summary: Consulta e sincroniza subgrupos de produtos
+      description: Consulta `/INTEGRACAO/CONSULTAR_SUB_GRUPO_REDE` e sincroniza os subgrupos em `webposto.produto_subgrupos`, vinculados ao grupo de produto correspondente.
+      operationId: consultarProdutoSubgruposWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: empresa_codigo
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            example: 4604
+      responses:
+        '200':
+          description: Subgrupos consultados e sincronizados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProdutoSubgrupoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Código da empresa ausente ou inválido
+        '502':
+          description: O Web Posto respondeu com erro
+        '503':
+          description: Credencial não configurada
+        '504':
+          description: Timeout ou falha de conexão com o Web Posto
+  /api/webposto/produtos:
+    get:
+      tags: [WebPosto]
+      summary: Consulta e sincroniza produtos
+      description: Consulta `/INTEGRACAO/PRODUTO` enviando somente chave e limite ao Web Posto, e sincroniza o retorno bruto em `webposto.produtos`.
+      operationId: consultarProdutosWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: empresa_codigo
+          in: query
+          required: true
+          description: Define qual credencial será usada; não é enviado ao endpoint externo.
+          schema:
+            type: integer
+            minimum: 1
+            example: 4604
+        - name: limite
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            example: 1000
+      responses:
+        '200':
+          description: Produtos consultados e sincronizados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProdutoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Empresa ou limite ausente/inválido
+        '502':
+          description: O Web Posto respondeu com erro
+        '503':
+          description: Credencial não configurada
+        '504':
+          description: Timeout ou falha de conexão com o Web Posto
+  /api/webposto/produto-empresas:
+    get:
+      tags: [WebPosto]
+      summary: Consulta e sincroniza produtos por empresa
+      description: Consulta `/INTEGRACAO/PRODUTO_EMPRESA` e sincroniza preços, custos, estoque e situação do produto em cada empresa.
+      operationId: consultarProdutoEmpresasWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: empresa_codigo
+          in: query
+          required: true
+          description: Define a credencial utilizada; o retorno externo contém seu próprio empresaCodigo.
+          schema:
+            type: integer
+            minimum: 1
+            example: 4604
+        - name: limite
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2000
+            example: 2000
+      responses:
+        '200':
+          description: Configurações empresariais dos produtos sincronizadas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProdutoEmpresaResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Empresa ou limite ausente/inválido
+        '502':
+          description: O Web Posto respondeu com erro
+        '503':
+          description: Credencial não configurada
+        '504':
+          description: Timeout ou falha de conexão com o Web Posto
+  /api/webposto/produto-lmc-lmp:
+    get:
+      tags: [WebPosto]
+      summary: Consulta e sincroniza produtos LMC/LMP
+      description: Consulta `/INTEGRACAO/PRODUTO_LMC_LMP` usando somente a chave externa e armazena o cadastro no contexto da empresa da credencial.
+      operationId: consultarProdutosLmcLmpWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: empresa_codigo
+          in: query
+          required: true
+          description: Seleciona a credencial e registra a origem dos dados.
+          schema:
+            type: integer
+            minimum: 1
+            example: 4604
+      responses:
+        '200':
+          description: Produtos LMC/LMP sincronizados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProdutoLmcLmpResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Código da empresa ausente ou inválido
+        '502':
+          description: O Web Posto respondeu com erro
+        '503':
+          description: Credencial não configurada
+        '504':
+          description: Timeout ou falha de conexão com o Web Posto
+  /api/webposto/cliente-grupos:
+    get:
+      tags: [WebPosto]
+      summary: Consulta e sincroniza grupos de clientes
+      description: Consulta `/INTEGRACAO/GRUPO_CLIENTE` e armazena grupos e regras de limite no contexto da empresa da credencial.
+      operationId: consultarClienteGruposWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: empresa_codigo
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            example: 4604
+      responses:
+        '200':
+          description: Grupos de clientes sincronizados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClienteGrupoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Código da empresa ausente ou inválido
+        '502':
+          description: O Web Posto respondeu com erro
+        '503':
+          description: Credencial não configurada
+        '504':
+          description: Timeout ou falha de conexão com o Web Posto
+  /api/webposto/clientes:
+    get:
+      tags: [WebPosto]
+      summary: Consulta e sincroniza clientes
+      description: Consulta `/INTEGRACAO/CLIENTE`, vincula `clienteGrupoCodigo` ao grupo correspondente e sincroniza o retorno em `webposto.clientes`.
+      operationId: consultarClientesWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: empresa_codigo
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            example: 4604
+      responses:
+        '200':
+          description: Clientes sincronizados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClienteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Código da empresa ausente ou inválido
+        '502':
+          description: O Web Posto respondeu com erro
+        '503':
+          description: Credencial não configurada
+        '504':
+          description: Timeout ou falha de conexão com o Web Posto
+  /api/webposto/cliente-empresas:
+    get:
+      tags: [WebPosto]
+      summary: Consulta e sincroniza vínculos entre clientes e empresas
+      operationId: consultarClienteEmpresasWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: empresa_codigo
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, example: 4604 }
+      responses:
+        '200':
+          description: Vínculos sincronizados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClienteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422': { description: Código da empresa ausente ou inválido }
+        '502': { description: O Web Posto respondeu com erro }
+        '503': { description: Credencial não configurada }
+        '504': { description: Timeout ou falha de conexão com o Web Posto }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Token
+      description: Bearer Token armazenado na tabela `api_tokens`.
+  responses:
+    Unauthorized:
+      description: Bearer Token ausente, inválido ou inativo
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Bearer Token inválido ou inativo.
+        token_status:
+          type: string
+          nullable: true
+          example: invalid
+    ConnectionReport:
+      type: object
+      properties:
+        status:
+          type: boolean
+        connection_status:
+          type: string
+          enum: [ok, error]
+        authenticated:
+          type: boolean
+        connection:
+          type: object
+          additionalProperties: true
+        database:
+          type: object
+          additionalProperties: true
+        server_time:
+          type: string
+          format: date-time
+    TokenVerification:
+      type: object
+      properties:
+        status:
+          type: boolean
+          example: true
+        token_status:
+          type: string
+          example: valid
+        authenticated:
+          type: boolean
+          example: true
+        token:
+          type: object
+          properties:
+            id:
+              type: integer
+            name:
+              type: string
+        verified_at:
+          type: string
+          format: date-time
+    WebPostoResponse:
+      type: object
+      properties:
+        status:
+          type: boolean
+        service:
+          type: string
+          example: webposto
+        endpoint:
+          type: string
+          example: /INTEGRACAO/EMPRESAS
+        empresa_codigo:
+          type: integer
+          example: 4604
+        upstream:
+          type: object
+          properties:
+            http_status:
+              type: integer
+            successful:
+              type: boolean
+            response_time_ms:
+              type: number
+              format: float
+            content_type:
+              type: string
+              nullable: true
+        records_count:
+          type: integer
+          nullable: true
+        storage:
+          type: object
+          nullable: true
+          properties:
+            raw:
+              $ref: '#/components/schemas/StorageSync'
+            bi:
+              $ref: '#/components/schemas/StorageSync'
+        data:
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+    StorageSync:
+      type: object
+      properties:
+        database:
+          type: string
+        table:
+          type: string
+        sync_status:
+          type: string
+          enum: [synchronized, already_synchronized, no_valid_records]
+        received:
+          type: integer
+        inserted:
+          type: integer
+        updated:
+          type: integer
+        unchanged:
+          type: integer
+        skipped:
+          type: integer
+    ProdutoGrupoResponse:
+      type: object
+      properties:
+        status:
+          type: boolean
+        service:
+          type: string
+          example: webposto
+        endpoint:
+          type: string
+          example: /INTEGRACAO/GRUPO
+        empresa_codigo:
+          type: integer
+          example: 4604
+        upstream:
+          type: object
+          additionalProperties: true
+        records_count:
+          type: integer
+          nullable: true
+        storage:
+          $ref: '#/components/schemas/StorageSync'
+        data:
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+    ProdutoSubgrupoResponse:
+      type: object
+      properties:
+        status:
+          type: boolean
+        service:
+          type: string
+          example: webposto
+        endpoint:
+          type: string
+          example: /INTEGRACAO/CONSULTAR_SUB_GRUPO_REDE
+        empresa_codigo:
+          type: integer
+          example: 4604
+        upstream:
+          type: object
+          additionalProperties: true
+        records_count:
+          type: integer
+          nullable: true
+        storage:
+          allOf:
+            - $ref: '#/components/schemas/StorageSync'
+            - type: object
+              properties:
+                missing_parent_group:
+                  type: integer
+                missing_parent_subgroup:
+                  type: integer
+        data:
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+    ProdutoResponse:
+      type: object
+      properties:
+        status:
+          type: boolean
+        service:
+          type: string
+          example: webposto
+        endpoint:
+          type: string
+          example: /INTEGRACAO/PRODUTO
+        empresa_codigo:
+          type: integer
+          example: 4604
+        limite:
+          type: integer
+          example: 1000
+        upstream:
+          type: object
+          additionalProperties: true
+        records_count:
+          type: integer
+          nullable: true
+        ultimo_codigo:
+          type: integer
+          nullable: true
+        storage:
+          allOf:
+            - $ref: '#/components/schemas/StorageSync'
+            - type: object
+              properties:
+                missing_parent_group:
+                  type: integer
+        data:
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+    ProdutoEmpresaResponse:
+      type: object
+      properties:
+        status:
+          type: boolean
+        service:
+          type: string
+          example: webposto
+        endpoint:
+          type: string
+          example: /INTEGRACAO/PRODUTO_EMPRESA
+        empresa_codigo:
+          type: integer
+          example: 4604
+        limite:
+          type: integer
+          example: 2000
+        upstream:
+          type: object
+          additionalProperties: true
+        records_count:
+          type: integer
+          nullable: true
+        ultimo_codigo:
+          type: integer
+          nullable: true
+        storage:
+          allOf:
+            - $ref: '#/components/schemas/StorageSync'
+            - type: object
+              properties:
+                missing_parent_product:
+                  type: integer
+        data:
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+    ProdutoLmcLmpResponse:
+      type: object
+      properties:
+        status:
+          type: boolean
+        service:
+          type: string
+          example: webposto
+        endpoint:
+          type: string
+          example: /INTEGRACAO/PRODUTO_LMC_LMP
+        empresa_codigo:
+          type: integer
+          example: 4604
+        upstream:
+          type: object
+          additionalProperties: true
+        records_count:
+          type: integer
+          nullable: true
+        storage:
+          $ref: '#/components/schemas/StorageSync'
+        data:
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+    ClienteGrupoResponse:
+      type: object
+      properties:
+        status:
+          type: boolean
+        service:
+          type: string
+          example: webposto
+        endpoint:
+          type: string
+          example: /INTEGRACAO/GRUPO_CLIENTE
+        empresa_codigo:
+          type: integer
+          example: 4604
+        upstream:
+          type: object
+          additionalProperties: true
+        records_count:
+          type: integer
+          nullable: true
+        ultimo_codigo:
+          type: integer
+          nullable: true
+        storage:
+          $ref: '#/components/schemas/StorageSync'
+        data:
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+    ClienteResponse:
+      type: object
+      properties:
+        status:
+          type: boolean
+        service:
+          type: string
+          example: webposto
+        endpoint:
+          type: string
+          example: /INTEGRACAO/CLIENTE
+        empresa_codigo:
+          type: integer
+          example: 4604
+        upstream:
+          type: object
+          additionalProperties: true
+        records_count:
+          type: integer
+          nullable: true
+        ultimo_codigo:
+          type: integer
+          nullable: true
+        storage:
+          allOf:
+            - $ref: '#/components/schemas/StorageSync'
+            - type: object
+              properties:
+                missing_parent_group:
+                  type: integer
+        data:
+          nullable: true
+        received_at:
+          type: string
+          format: date-time

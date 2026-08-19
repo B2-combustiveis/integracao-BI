@@ -14,7 +14,6 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
-            'auth.token' => \App\Http\Middleware\EnsureFixedBearerToken::class,
             'auth.database-token' => \App\Http\Middleware\EnsureDatabaseBearerToken::class,
         ]);
     })

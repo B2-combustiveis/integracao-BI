@@ -1,6 +1,6 @@
-# Integração WebPosto
+# Integração API
 
-API em Laravel para integração com o WebPosto. O ambiente local utiliza Docker Compose com dois serviços:
+API em Laravel para centralizar integrações com serviços externos. O WebPosto é a primeira integração disponível. O ambiente local utiliza Docker Compose com dois serviços:
 
 - `app`: Laravel 13 com PHP 8.3, disponível na porta `8000`.
 - `db`: MySQL 8.4, disponível para ferramentas externas na porta `3307`.
@@ -43,8 +43,17 @@ DB_USERNAME=integracao
 DB_PASSWORD=troque_esta_senha
 DB_ROOT_PASSWORD=troque_a_senha_root
 
-TMP_API_TOKEN=adicione_um_token_seguro
-WEBPOSTO_API_KEY=adicione_a_key_do_webposto
+DB_WEBPOSTO_HOST=db
+DB_WEBPOSTO_PORT=3306
+DB_WEBPOSTO_DATABASE=webposto
+DB_WEBPOSTO_USERNAME=integracao
+DB_WEBPOSTO_PASSWORD=troque_esta_senha
+
+DB_BI_HOST=db
+DB_BI_PORT=3306
+DB_BI_DATABASE=bi
+DB_BI_USERNAME=integracao
+DB_BI_PASSWORD=troque_esta_senha
 ```
 
 Gere um Bearer Token aleatório com:
@@ -53,7 +62,7 @@ Gere um Bearer Token aleatório com:
 openssl rand -hex 32
 ```
 
-Coloque o resultado em `TMP_API_TOKEN`. Nunca inclua tokens, senhas ou a key real do WebPosto no Git. O arquivo `.env` já está listado no `.gitignore`.
+Guarde o resultado para cadastrá-lo na tabela `api_tokens` depois que os containers estiverem ativos. Nunca inclua tokens, senhas ou a key real do WebPosto no Git. O arquivo `.env` já está listado no `.gitignore`.
 
 ## Subindo o ambiente
 
@@ -102,11 +111,41 @@ A aplicação estará disponível em:
 http://localhost:8000
 ```
 
+A documentação interativa Swagger estará disponível em:
+
+```text
+http://localhost:8000/docs
+```
+
+Use o botão **Authorize** para informar o Bearer Token e executar as rotas diretamente pela documentação. A especificação OpenAPI pode ser consumida separadamente em `http://localhost:8000/docs/openapi`.
+
 ## Banco de dados
 
 O MySQL cria automaticamente a base configurada em `DB_DATABASE`. As migrations criam as tabelas da aplicação, incluindo `api_tokens`.
 
-O `DatabaseSeeder` lê `TMP_API_TOKEN` do `.env` e cria ou atualiza o registro ativo chamado `integracao_webposto`. O token não fica escrito no código ou na migration.
+O mesmo container também cria duas bases separadas: `webposto`, usada para armazenar os dados brutos recebidos da API externa, e `bi`, destinada aos dados tratados que serão consumidos pela ferramenta analítica. O Laravel acessa essas bases pelas conexões correspondentes:
+
+```php
+DB::connection('webposto')->table('nome_da_tabela');
+DB::connection('bi')->table('nome_da_tabela');
+```
+
+Em instalações novas, o script `docker/mysql/init/01-create-webposto.sh` cria as duas bases e concede ao usuário da aplicação acesso a elas. Esses scripts são executados pelo MySQL somente quando o volume é inicializado pela primeira vez.
+
+Os tokens da nossa API são administrados diretamente na tabela `api_tokens`; nenhuma variável do `.env` cria ou sobrescreve esses registros. Cadastre o primeiro token com:
+
+```sql
+INSERT INTO api_tokens (nome, token, ativo, created_at, updated_at)
+VALUES ('integracao_principal', 'COLE_O_TOKEN_GERADO', 1, NOW(), NOW());
+```
+
+As credenciais externas do WebPosto ficam na tabela `webposto.webposto_credentials`, vinculadas ao `empresaCodigo`. A URL e o token não ficam no `.env`, e o token é criptografado com a `APP_KEY`. Cadastre ou substitua uma credencial pelo comando interativo (o token não aparece no terminal):
+
+```bash
+docker compose exec app php artisan webposto:credential 4604
+```
+
+O comando usa `https://web.qualityautomacao.com.br/` como URL padrão. Para outra instalação, informe `--url=https://endereco-do-webposto/`.
 
 Valide a conexão por dentro do container:
 
@@ -131,6 +170,8 @@ Use uma conexão MySQL com os seguintes dados:
 | Database | `integracao_v1` |
 | Usuário | valor de `DB_USERNAME` |
 | Senha | valor de `DB_PASSWORD` |
+
+Para consultar os dados importados ou tratados, crie conexões no DBeaver com o mesmo host, porta, usuário e senha, alterando apenas o database para `webposto` ou `bi`.
 
 URL JDBC:
 
@@ -157,10 +198,7 @@ Authorization: Bearer SEU_TOKEN
 Accept: application/json
 ```
 
-Há dois mecanismos temporários durante o desenvolvimento:
-
-- `auth.token`: compara o Bearer Token com `TMP_API_TOKEN`.
-- `auth.database-token`: consulta a tabela `api_tokens` e exige que o registro esteja ativo.
+Todas as rotas autenticadas usam `auth.database-token`, que consulta a tabela `api_tokens` e exige que o registro esteja ativo.
 
 O mecanismo baseado em banco retorna:
 
@@ -289,13 +327,116 @@ docker compose logs --tail=100 app db
 
 ## Integração com o WebPosto
 
-A chave fornecida pelo WebPosto deve ser definida somente no `.env`:
+URL e token são armazenados por empresa na tabela `webposto.webposto_credentials`. Somente os timeouts globais permanecem no `.env`:
 
 ```env
-WEBPOSTO_API_KEY=sua_key_real
+WEBPOSTO_CONNECT_TIMEOUT=5
+WEBPOSTO_TIMEOUT=30
 ```
 
-Ela é disponibilizada à aplicação por `config/integration.php`. Os endpoints e serviços responsáveis pelas chamadas ao WebPosto serão implementados nas próximas etapas.
+O cliente central `WebPostoClient` seleciona a credencial ativa pelo `empresa_codigo`, acrescenta a chave como query parameter `?chave=`, aplica os timeouts e interpreta respostas JSON ou texto sem expor a chave ao consumidor da nossa API.
+
+### Consulta de empresas
+
+Nossa rota:
+
+```http
+GET /api/webposto/empresas?empresa_codigo=4604
+```
+
+Endpoint consultado no WebPosto:
+
+```http
+GET /INTEGRACAO/EMPRESAS?chave=CHAVE_DE_INTEGRACAO
+```
+
+Exemplo:
+
+```bash
+curl --max-time 40 \
+  -H "Authorization: Bearer SEU_TOKEN_DA_NOSSA_API" \
+  -H "Accept: application/json" \
+  'http://localhost:8000/api/webposto/empresas?empresa_codigo=4604'
+```
+
+A resposta da nossa API contém:
+
+- sucesso ou falha da chamada;
+- endpoint consultado;
+- status HTTP devolvido pelo WebPosto;
+- tempo de resposta em milissegundos;
+- tipo do conteúdo;
+- quantidade de registros, quando identificável;
+- payload original do WebPosto em `data`;
+- horário de recebimento.
+
+Quando a resposta é bem-sucedida, os itens de `resultados` passam por duas etapas idempotentes. Primeiro, são inseridos ou atualizados em `webposto.empresas`, preservando o retorno bruto da origem. Depois, CNPJ e CEP são reduzidos a dígitos, espaços são normalizados e UF/sigla são padronizadas antes da carga em `bi.dim_empresas`. O objeto `storage` apresenta contagens separadas em `raw` e `bi`, incluindo registros inseridos, atualizados, inalterados e ignorados.
+
+### Consulta de grupos de produtos
+
+```http
+GET /api/webposto/produto-grupos?empresa_codigo=4604
+```
+
+A rota consulta `/INTEGRACAO/GRUPO` e sincroniza o retorno bruto em `webposto.produto_grupos`. Como a resposta de origem não informa a empresa, a aplicação registra o `empresaCodigo` correspondente à credencial utilizada. A chave única combina empresa e grupo, permitindo que códigos iguais existam em contextos empresariais diferentes. Registros existentes só são atualizados quando algum campo retornado pelo Web Posto muda.
+
+### Consulta de subgrupos de produtos
+
+```http
+GET /api/webposto/produto-subgrupos?empresa_codigo=4604
+```
+
+A rota consulta `/INTEGRACAO/CONSULTAR_SUB_GRUPO_REDE` e sincroniza a lista em `webposto.produto_subgrupos`. Cada subgrupo é vinculado ao respectivo registro de `produto_grupos` pela combinação técnica de empresa e `grupoCodigo`. O campo aninhado `produtoSubGrupo2` é preservado como JSON. Subgrupos cujo grupo pai ainda não tenha sido importado são contabilizados em `missing_parent_group` e não são gravados até a sincronização do grupo.
+
+### Consulta de produtos
+
+```http
+GET /api/webposto/produtos?empresa_codigo=4604&limite=1000
+```
+
+`empresa_codigo` seleciona internamente a credencial, enquanto somente `chave` e `limite` são enviados para `/INTEGRACAO/PRODUTO`. O limite é obrigatório e aceita valores de 1 a 1000. O retorno é sincronizado em `webposto.produtos`, ligado ao grupo pelo `grupoCodigo` e ao subgrupo pela combinação de empresa, grupo e `subGrupo1Codigo`; produtos sem subgrupo continuam válidos. Códigos dos níveis 2 e 3 e códigos de barras também são preservados. A resposta expõe `ultimo_codigo` para acompanhamento do retorno paginado.
+
+### Consulta de produtos por empresa
+
+```http
+GET /api/webposto/produto-empresas?empresa_codigo=4604&limite=2000
+```
+
+A rota consulta `/INTEGRACAO/PRODUTO_EMPRESA` enviando chave e limite. O retorno é armazenado em `webposto.produto_empresas` e representa a configuração comercial/operacional do produto naquela empresa: preços, custo, estoque, estoque mínimo, situação e LMC. A relação usa `empresaCodigo + produtoCodigo` como FK para `produtos`; registros cujo produto pai ainda não foi importado são informados em `missing_parent_product`.
+
+### Consulta de produtos LMC/LMP
+
+```http
+GET /api/webposto/produto-lmc-lmp?empresa_codigo=4604
+```
+
+A rota consulta `/INTEGRACAO/PRODUTO_LMC_LMP`, que recebe somente a chave. Como o retorno não contém empresa, a aplicação registra o `empresaCodigo` da credencial utilizada e sincroniza os dados em `webposto.produto_lmc_lmp`. A chave de negócio combina empresa e `produtoLmcCodigo`; os campos de mesmo nome presentes em `produtos` e `produto_empresas` permitem o cruzamento lógico com esse cadastro.
+
+### Consulta de grupos de clientes
+
+```http
+GET /api/webposto/cliente-grupos?empresa_codigo=4604
+```
+
+A rota consulta `/INTEGRACAO/GRUPO_CLIENTE`, que recebe somente a chave. Como o retorno não contém empresa, o `empresaCodigo` da credencial é registrado em `webposto.cliente_grupos`. A tabela preserva os limites em litros e reais, valores disponíveis, bloqueio financeiro por vencimento e dias de tolerância. A chave única combina empresa e `grupoCodigo`.
+
+### Consulta de clientes
+
+```http
+GET /api/webposto/clientes?empresa_codigo=4604
+```
+
+A rota consulta `/INTEGRACAO/CLIENTE` e sincroniza os 39 campos do retorno em `webposto.clientes`. O vínculo com o grupo utiliza `clienteGrupoCodigo`, nunca a descrição. O código `0` é tratado como cliente sem grupo; códigos positivos precisam existir em `cliente_grupos`. Contatos, centros de custo, frota, faturamento e limites/bloqueios são preservados como JSON.
+
+### Consulta de clientes por empresa
+
+```http
+GET /api/webposto/cliente-empresas?empresa_codigo=4604
+```
+
+A rota consulta `/INTEGRACAO/CLIENTE_EMPRESA` e materializa em `webposto.cliente_empresas` o vínculo comercial explícito entre `empresaCodigo` e `clienteCodigo`, incluindo situação ativa e uso de prazo. Registros cujo cliente pai ainda não foi importado são contabilizados em `missing_parent_client`.
+
+Quando o WebPosto responde com erro, nossa API retorna `502 Bad Gateway` e preserva em `upstream.http_status` o status original. Falhas de conexão ou timeout retornam `504 Gateway Timeout`, e configuração ausente retorna `503 Service Unavailable`.
 
 ## Segurança
 

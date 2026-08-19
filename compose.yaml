@@ -32,8 +32,11 @@ services:
       MYSQL_USER: ${DB_USERNAME}
       MYSQL_PASSWORD: ${DB_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      MYSQL_WEBPOSTO_DATABASE: ${DB_WEBPOSTO_DATABASE:-webposto}
+      MYSQL_BI_DATABASE: ${DB_BI_DATABASE:-bi}
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 5s

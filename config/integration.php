@@ -1,6 +1,8 @@
 <?php
 
 return [
-    'api_token' => env('TMP_API_TOKEN'),
-    'webposto_api_key' => env('WEBPOSTO_API_KEY'),
+    'webposto' => [
+        'connect_timeout' => (int) env('WEBPOSTO_CONNECT_TIMEOUT', 5),
+        'timeout' => (int) env('WEBPOSTO_TIMEOUT', 30),
+    ],
 ];
