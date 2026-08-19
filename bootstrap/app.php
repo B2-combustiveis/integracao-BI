@@ -15,6 +15,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'auth.database-token' => \App\Http\Middleware\EnsureDatabaseBearerToken::class,
+            'auth.admin-session' => \App\Http\Middleware\EnsureAdminSession::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

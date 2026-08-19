@@ -44,6 +44,42 @@ services:
       retries: 20
     restart: unless-stopped
 
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+    command: sh -c "composer install --no-interaction && php artisan queue:work --queue=financial,default --tries=3 --timeout=120"
+    volumes:
+      - .:/var/www/html
+      - vendor_data:/var/www/html/vendor
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+    command: sh -c "composer install --no-interaction && php artisan schedule:work"
+    volumes:
+      - .:/var/www/html
+      - vendor_data:/var/www/html/vendor
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   mysql_data:
   vendor_data:

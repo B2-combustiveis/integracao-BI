@@ -462,6 +462,24 @@ php artisan webposto:sync-catalog 4604 \
 As rotas de XML e consulta de venda por identificador precisam receber códigos de documentos ou
 vendas que já existam no WebPosto.
 
+## Painel administrativo
+
+O painel local está disponível em:
+
+```text
+http://localhost:8000/admin/login
+```
+
+O acesso usa um token ativo da tabela `api_tokens`. Caso a tabela esteja vazia, gere um token e
+copie o valor exibido uma única vez:
+
+```bash
+php artisan api:token admin
+```
+
+O painel mostra a saúde dos três bancos, empresas, metadados das credenciais e o inventário das
+tabelas do WebPosto. A atualização do painel consulta somente os bancos locais.
+
 ## Segurança
 
 - Não versione `.env` ou arquivos de backup contendo segredos.
