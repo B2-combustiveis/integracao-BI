@@ -438,6 +438,30 @@ A rota consulta `/INTEGRACAO/CLIENTE_EMPRESA` e materializa em `webposto.cliente
 
 Quando o WebPosto responde com erro, nossa API retorna `502 Bad Gateway` e preserva em `upstream.http_status` o status original. Falhas de conexão ou timeout retornam `504 Gateway Timeout`, e configuração ausente retorna `503 Service Unavailable`.
 
+### Catálogo bruto do WebPosto
+
+As demais operações `GET` da collection são expostas em:
+
+```text
+GET /api/webposto/{resource}?empresa_codigo={codigo}&...
+```
+
+Cada recurso possui uma tabela própria no banco `webposto`. Os campos retornados são promovidos
+automaticamente para colunas tipadas e `empresaCodigo`, quando retornado, conserva o significado
+original do WebPosto. A sincronização usa as chaves naturais de cada recurso para inserir ou
+atualizar registros, sem colunas de payload, hash ou parâmetros técnicos.
+
+Para sincronizar o catálogo usando um período controlado:
+
+```bash
+php artisan webposto:sync-catalog 4604 \
+  --data-inicial=2024-02-01 \
+  --data-final=2024-02-01
+```
+
+As rotas de XML e consulta de venda por identificador precisam receber códigos de documentos ou
+vendas que já existam no WebPosto.
+
 ## Segurança
 
 - Não versione `.env` ou arquivos de backup contendo segredos.

@@ -9,6 +9,8 @@ use App\Http\Controllers\Api\WebPosto\ProdutoLmcLmpController;
 use App\Http\Controllers\Api\WebPosto\ProdutoEmpresasController;
 use App\Http\Controllers\Api\WebPosto\ProdutoSubgruposController;
 use App\Http\Controllers\Api\WebPosto\ProdutosController;
+use App\Http\Controllers\Api\WebPosto\RawResourcesController;
+use App\Services\WebPosto\WebPostoResourceCatalog;
 use App\Http\Controllers\Api\TesteController;
 use App\Http\Controllers\Api\TokenVerificationController;
 use Illuminate\Support\Facades\Route;
@@ -33,4 +35,6 @@ Route::prefix('webposto')
         Route::get('/produto-empresas', ProdutoEmpresasController::class);
         Route::get('/produto-subgrupos', ProdutoSubgruposController::class);
         Route::get('/produtos', ProdutosController::class);
+        Route::get('/{resource}', RawResourcesController::class)
+            ->whereIn('resource', array_keys(app(WebPostoResourceCatalog::class)->all()));
     });

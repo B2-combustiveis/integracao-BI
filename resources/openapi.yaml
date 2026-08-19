@@ -372,6 +372,85 @@ paths:
         '502': { description: O Web Posto respondeu com erro }
         '503': { description: Credencial não configurada }
         '504': { description: Timeout ou falha de conexão com o Web Posto }
+  /api/webposto/{resource}:
+    get:
+      tags: [WebPosto]
+      summary: Consulta e armazena um recurso bruto do WebPosto
+      description: |
+        Rota comum para os recursos mapeados da collection. A chave externa é resolvida pela
+        `empresa_codigo` e nunca precisa ser enviada. O retorno integral de cada registro é
+        promovido para colunas tipadas na tabela específica do banco `webposto`. A sincronização
+        usa as chaves naturais do recurso e não armazena payload ou hash técnico.
+        Os parâmetros de data são obrigatórios nos recursos transacionais que os utilizam.
+      operationId: consultarRecursoBrutoWebPosto
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: resource
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [estoque-periodos, lmcs, compras, vendas, vendas-por-ids, venda-itens, venda-formas-pagamento, abastecimentos, fornecedores, funcionarios, funcionario-funcoes, funcionario-identificadores, contas-bancarias, prazos, formas-pagamento, administradoras, pdvs, pis-cofins, icms, usuarios, usuario-empresas, tanques, bicos, bombas, titulos-receber, duplicatas, cheques, cartoes, cartao-remessas, titulos-pagar, vales-funcionario, caixas, caixas-apresentados, movimentos-conta, sats, nfces, nfce-xml, nfes-saida, nfe-xml, dfe-xml, notas-servico, compra-itens, centros-custo, planos-conta-gerencial, dres, mapas-desempenho, analises-vendas-combustivel, despesas-financeiro-rede, grupos-meta, funcionarios-meta, produtos-meta, planos-conta-contabil]
+        - name: empresa_codigo
+          in: query
+          required: true
+          description: Empresa cuja credencial do WebPosto será utilizada.
+          schema: { type: integer, minimum: 1, example: 4604 }
+        - name: data_inicial
+          in: query
+          description: Obrigatória nos recursos que consultam um período.
+          schema: { type: string, format: date }
+        - name: data_final
+          in: query
+          description: Obrigatória nos recursos que consultam um período.
+          schema: { type: string, format: date }
+        - name: empresa_webposto_codigo
+          in: query
+          description: Código enviado explicitamente ao WebPosto quando exigido pelo endpoint.
+          schema: { type: integer, minimum: 1 }
+        - name: tipo_data
+          in: query
+          schema: { type: string, enum: [EMISSAO, ENTRADA] }
+        - name: id_list
+          in: query
+          description: Lista/identificador usado somente por `vendas-por-ids`.
+          schema: { type: string }
+        - name: documento_codigo
+          in: query
+          description: Código usado somente por `nfce-xml`.
+          schema: { type: integer, minimum: 1 }
+        - name: compra_codigo
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: modelo_documento
+          in: query
+          schema: { type: integer, example: 55 }
+        - name: numero_documento
+          in: query
+          schema: { type: string }
+        - name: serie_documento
+          in: query
+          schema: { type: string }
+        - name: apuracao_caixa
+          in: query
+          schema: { type: boolean }
+        - name: grupo_meta_codigo
+          in: query
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Recurso consultado e armazenado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RawWebPostoResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Recurso inexistente }
+        '422': { description: Parâmetros ausentes ou inválidos para o recurso }
+        '502': { description: O WebPosto respondeu com erro }
+        '503': { description: Credencial não configurada }
+        '504': { description: Timeout ou falha de conexão com o WebPosto }
 components:
   securitySchemes:
     bearerAuth:
@@ -387,6 +466,20 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    RawWebPostoResponse:
+      type: object
+      properties:
+        status: { type: boolean }
+        service: { type: string, example: webposto }
+        resource: { type: string, example: fornecedores }
+        endpoint: { type: string, example: /INTEGRACAO/FORNECEDOR }
+        empresa_codigo: { type: integer, example: 4604 }
+        records_count: { type: integer, nullable: true }
+        storage:
+          $ref: '#/components/schemas/StorageSync'
+        data:
+          nullable: true
+        received_at: { type: string, format: date-time }
     Error:
       type: object
       required: [status, message]
