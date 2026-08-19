@@ -480,6 +480,80 @@ php artisan api:token admin
 O painel mostra a saúde dos três bancos, empresas, metadados das credenciais e o inventário das
 tabelas do WebPosto. A atualização do painel consulta somente os bancos locais.
 
+## Restaurando o backup em outra máquina
+
+Executar somente `docker compose up --build` cria a estrutura pelas migrations, mas **não restaura
+os dados** exportados. Para levar o estado atual completo para outra máquina, copie o projeto, o
+pacote de backup e o `.env`.
+
+O `.env` da nova máquina deve usar a mesma `APP_KEY`. Sem ela, os tokens criptografados da tabela
+`webposto_credentials` não poderão ser lidos.
+
+### 1. Extrair e validar o backup
+
+Na raiz do projeto:
+
+```bash
+mkdir -p backups/restauracao
+tar -xzf backups/integracao-bi-2026-08-19.tar.gz -C backups/restauracao
+cd backups/restauracao/2026-08-19
+sha256sum -c SHA256SUMS
+cd ../../..
+```
+
+### 2. Construir a aplicação e iniciar MySQL
+
+```bash
+docker compose up -d --build db app
+```
+
+Aguarde o banco ficar saudável:
+
+```bash
+docker compose ps
+```
+
+### 3. Restaurar os três bancos
+
+Não deixe filas ou agendadores ativos durante a restauração:
+
+```bash
+docker compose stop queue scheduler
+```
+
+Importe os dumps:
+
+```bash
+docker compose exec -T db sh -lc 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' \
+  < backups/restauracao/2026-08-19/integracao_v1.sql
+
+docker compose exec -T db sh -lc 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' \
+  < backups/restauracao/2026-08-19/webposto.sql
+
+docker compose exec -T db sh -lc 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' \
+  < backups/restauracao/2026-08-19/bi.sql
+```
+
+Os arquivos já contêm `CREATE DATABASE` e `USE`, portanto não é necessário criar os bancos
+manualmente. A restauração substitui as tabelas existentes desses bancos; não execute esse processo
+em um ambiente que contenha dados que precisem ser preservados.
+
+### 4. Aplicar migrations novas e iniciar os serviços
+
+```bash
+docker compose exec -T app php artisan migrate --force
+docker compose up -d queue scheduler
+docker compose ps
+```
+
+Depois disso, acesse:
+
+```text
+http://localhost:8000/admin/login
+```
+
+O dump de `integracao_v1` já contém os tokens da API e as configurações dos serviços existentes.
+
 ## Segurança
 
 - Não versione `.env` ou arquivos de backup contendo segredos.
