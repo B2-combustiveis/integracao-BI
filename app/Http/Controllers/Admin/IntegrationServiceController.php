@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\IntegrationService;
 use App\Services\Integration\IntegrationServiceDispatcher;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 
 class IntegrationServiceController extends Controller
 {
@@ -25,5 +26,18 @@ class IntegrationServiceController extends Controller
     {
         $dispatcher->dispatch($service->id);
         return back()->with('status', 'Execução adicionada à fila.');
+    }
+
+    public function update(Request $request, IntegrationService $service): RedirectResponse
+    {
+        $validated = $request->validate([
+            'frequency_minutes' => ['required', 'integer', 'min:1', 'max:10080'],
+            'lookback_days' => ['required', 'integer', 'min:1', 'max:30'],
+        ]);
+        $service->update([
+            ...$validated,
+            'next_run_at' => $service->active ? now()->addMinutes((int) $validated['frequency_minutes']) : null,
+        ]);
+        return back()->with('status', 'Configuração do serviço atualizada.');
     }
 }

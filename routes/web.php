@@ -28,6 +28,7 @@ Route::prefix('admin')->middleware('auth.admin-session')->group(function (): voi
     Route::post('/services/{service}/pause', [IntegrationServiceController::class, 'pause'])->name('admin.services.pause');
     Route::post('/services/{service}/resume', [IntegrationServiceController::class, 'resume'])->name('admin.services.resume');
     Route::post('/services/{service}/run', [IntegrationServiceController::class, 'run'])->name('admin.services.run');
+    Route::post('/services/{service}/settings', [IntegrationServiceController::class, 'update'])->name('admin.services.update');
     Route::get('/overview', [AdminDashboardController::class, 'overview'])->name('admin.overview');
     Route::post('/logout', [AdminSessionController::class, 'destroy'])->name('admin.logout');
 });
