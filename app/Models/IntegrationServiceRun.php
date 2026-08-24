@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class IntegrationServiceRun extends Model
 {
@@ -17,5 +18,10 @@ class IntegrationServiceRun extends Model
     public function service(): BelongsTo
     {
         return $this->belongsTo(IntegrationService::class, 'integration_service_id');
+    }
+
+    public function changes(): HasMany
+    {
+        return $this->hasMany(IntegrationServiceRunChange::class);
     }
 }

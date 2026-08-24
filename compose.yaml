@@ -10,6 +10,8 @@ services:
     environment:
       DB_HOST: db
       DB_PORT: 3306
+      QUEUE_CONNECTION: database
+      DB_QUEUE_RETRY_AFTER: 7600
     command: >
       sh -c "composer install --no-interaction
       && php artisan migrate --force
@@ -53,7 +55,9 @@ services:
     environment:
       DB_HOST: db
       DB_PORT: 3306
-    command: sh -c "composer install --no-interaction && php artisan queue:work --queue=financial,default --tries=3 --timeout=120"
+      QUEUE_CONNECTION: database
+      DB_QUEUE_RETRY_AFTER: 7600
+    command: sh -c "composer install --no-interaction && php artisan queue:work --queue=financial,default --tries=3 --timeout=7500"
     volumes:
       - .:/var/www/html
       - vendor_data:/var/www/html/vendor
@@ -71,6 +75,8 @@ services:
     environment:
       DB_HOST: db
       DB_PORT: 3306
+      QUEUE_CONNECTION: database
+      DB_QUEUE_RETRY_AFTER: 7600
     command: sh -c "composer install --no-interaction && php artisan schedule:work"
     volumes:
       - .:/var/www/html

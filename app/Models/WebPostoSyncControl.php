@@ -19,6 +19,6 @@ class WebPostoSyncControl extends Model
 
     public function runs(): HasMany
     {
-        return $this->hasMany(WebPostoSyncEndpointRun::class);
+        return $this->hasMany(WebPostoSyncEndpointRun::class, 'webposto_sync_control_id');
     }
 }

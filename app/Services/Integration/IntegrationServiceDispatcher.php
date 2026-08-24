@@ -4,6 +4,7 @@ namespace App\Services\Integration;
 
 use App\Jobs\SyncFinancialReceivables;
 use App\Jobs\SyncWebPostoDatabase;
+use App\Jobs\SyncWebPostoModifiedRecords;
 use App\Jobs\SyncWebPostoNewRecords;
 use App\Models\IntegrationService;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,7 @@ class IntegrationServiceDispatcher
             match ($service->resource) {
                 'titulos-receber' => SyncFinancialReceivables::dispatch($service->id),
                 'webposto-database-changes' => SyncWebPostoDatabase::dispatch($service->id),
+                'webposto-modified-records' => SyncWebPostoModifiedRecords::dispatch($service->id),
                 'webposto-new-records' => SyncWebPostoNewRecords::dispatch($service->id),
                 default => throw new \InvalidArgumentException("Recurso {$service->resource} não possui job."),
             };

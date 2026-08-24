@@ -37,12 +37,18 @@ class RawNaturalKeyResolver
         if (array_key_exists('empresaCodigo', $mapped) && $mapped['empresaCodigo'] !== null) {
             array_unshift($fields, 'empresaCodigo');
         }
+        if ($fields === []) {
+            return array_filter($mapped, fn (mixed $value): bool => $value !== null);
+        }
+
         $criteria = [];
         foreach (array_unique($fields) as $field) {
-            if (array_key_exists($field, $mapped) && $mapped[$field] !== null) $criteria[$field] = $mapped[$field];
+            if (! array_key_exists($field, $mapped) || $mapped[$field] === null) {
+                return [];
+            }
+            $criteria[$field] = $mapped[$field];
         }
-        if ($criteria !== []) return $criteria;
 
-        return array_filter($mapped, fn (mixed $value): bool => $value !== null);
+        return $criteria;
     }
 }

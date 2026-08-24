@@ -26,12 +26,13 @@ class AdminDashboardTest extends TestCase
             'connections' => [['key' => 'webposto', 'label' => 'WebPosto', 'status' => 'online', 'database' => 'webposto', 'latency_ms' => 1.2]],
             'summary' => ['companies' => 1, 'credentials' => 1, 'active_credentials' => 1, 'api_tokens' => 1, 'tables' => 2],
             'credentials' => [['empresa_codigo' => 4604, 'empresa_nome' => 'Posto Teste', 'base_url' => 'https://webposto.test', 'active' => true, 'last_used' => null]],
-            'tables' => [['name' => 'fornecedores', 'records' => 200, 'columns' => 27, 'last_update' => null, 'size_bytes' => 1024]],
+            'tables' => [['name' => 'fornecedores', 'records' => 200, 'columns' => 27, 'last_update' => null, 'size_bytes' => 1024, 'modified_sync' => true]],
         ];
         $this->mock(AdminOverviewService::class, fn (MockInterface $mock) => $mock->shouldReceive('get')->once()->andReturn($overview));
 
         $this->withoutMiddleware(EnsureAdminSession::class)->get('/admin')
-            ->assertOk()->assertSee('Integração BI')->assertSee('fornecedores');
+            ->assertOk()->assertSee('Integração BI')->assertSee('fornecedores')
+            ->assertSee('modified-sync')->assertSee('refresh-tables');
     }
 
     public function test_overview_endpoint_returns_json(): void

@@ -17,6 +17,7 @@ use App\Services\WebPosto\ProdutoSubgrupoImporter;
 use App\Services\WebPosto\RawResourceImporter;
 use App\Services\WebPosto\WebPostoClient;
 use App\Services\WebPosto\WebPostoResourceCatalog;
+use App\Services\WebPosto\WebPostoSyncStrategyCatalog;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -47,7 +48,8 @@ class SyncWebPostoDatabase implements ShouldQueue, ShouldBeUnique
     }
 
     public function handle(WebPostoClient $client, WebPostoResourceCatalog $catalog, RawResourceImporter $rawImporter,
-        EmpresaImporter $empresaImporter, EmpresaBiSynchronizer $empresaBiSynchronizer): void
+        EmpresaImporter $empresaImporter, EmpresaBiSynchronizer $empresaBiSynchronizer,
+        WebPostoSyncStrategyCatalog $strategies): void
     {
         $service = IntegrationService::query()->findOrFail($this->serviceId);
         $end = today();
@@ -62,6 +64,7 @@ class SyncWebPostoDatabase implements ShouldQueue, ShouldBeUnique
             $company = $this->request($client, '/INTEGRACAO/EMPRESAS', $empresa);
             $this->add($totals, $empresaImporter->import($company['payload']));
             $empresaBiSynchronizer->sync($company['payload']);
+            $this->progress($run, $totals);
 
             $specialized = [
                 ['/INTEGRACAO/GRUPO', ProdutoGrupoImporter::class, 1000],
@@ -75,8 +78,9 @@ class SyncWebPostoDatabase implements ShouldQueue, ShouldBeUnique
             ];
             foreach ($specialized as [$endpoint, $importerClass, $limit]) {
                 $this->paginate($client, $endpoint, $empresa, $limit,
-                    function (mixed $payload) use ($importerClass, $empresa, &$totals): void {
+                    function (mixed $payload) use ($importerClass, $empresa, &$totals, $run): void {
                         $this->add($totals, app($importerClass)->import($payload, $empresa));
+                        $this->progress($run, $totals);
                     });
             }
 
@@ -84,14 +88,15 @@ class SyncWebPostoDatabase implements ShouldQueue, ShouldBeUnique
                 'empresa_webposto_codigo' => $empresa, 'tipo_data' => 'EMISSAO', 'apuracao_caixa' => true,
                 'grupo_meta_codigo' => (int) ($service->settings['grupo_meta_codigo'] ?? 482)];
             foreach ($catalog->all() as $definition) {
-                if ($definition['pathParameters'] !== []) continue;
+                if ($definition['pathParameters'] !== [] || ! $strategies->isSyncable($definition['endpoint'])) continue;
                 $query = [];
                 foreach ($definition['queryMap'] as $local => $upstream) {
                     if (array_key_exists($local, $common)) $query[$upstream] = $common[$local];
                 }
                 $this->paginate($client, $definition['endpoint'], $empresa, 2000,
-                    function (mixed $payload, array $requestQuery) use ($rawImporter, $definition, $empresa, &$totals): void {
+                    function (mixed $payload, array $requestQuery) use ($rawImporter, $definition, $empresa, &$totals, $run): void {
                         $this->add($totals, $rawImporter->import($payload, $empresa, $definition['table'], $requestQuery));
+                        $this->progress($run, $totals);
                     }, $query);
             }
 
@@ -128,6 +133,11 @@ class SyncWebPostoDatabase implements ShouldQueue, ShouldBeUnique
             throw new RuntimeException("WebPosto respondeu HTTP {$result['response']->status()} em {$endpoint}.");
         }
         return $result;
+    }
+
+    private function progress(IntegrationServiceRun $run, array $totals): void
+    {
+        $run->update($totals);
     }
 
     private function add(array &$totals, array $stored): void

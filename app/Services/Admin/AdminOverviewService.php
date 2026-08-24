@@ -2,12 +2,19 @@
 
 namespace App\Services\Admin;
 
+use App\Models\WebPostoReloadRun;
+use App\Services\WebPosto\WebPostoModifiedResourceCatalog;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 class AdminOverviewService
 {
+    public function __construct(
+        private readonly WebPostoModifiedResourceCatalog $modifiedResourceCatalog,
+    ) {
+    }
+
     public function get(): array
     {
         $tables = $this->tables();
@@ -26,6 +33,7 @@ class AdminOverviewService
             ],
             'credentials' => $this->credentials(),
             'tables' => $tables,
+            'reloads' => $this->reloads(),
         ];
     }
 
@@ -44,17 +52,21 @@ class AdminOverviewService
     {
         try {
             $database = DB::connection('webposto')->getDatabaseName();
+            $modifiedTables = collect($this->modifiedResourceCatalog->all())
+                ->pluck('table')
+                ->all();
             $rows = DB::connection('webposto')->table('information_schema.TABLES')
                 ->where('TABLE_SCHEMA', $database)->where('TABLE_TYPE', 'BASE TABLE')
                 ->orderBy('TABLE_NAME')->get(['TABLE_NAME', 'DATA_LENGTH', 'INDEX_LENGTH']);
-            return $rows->map(function (object $row): array {
+            return $rows->map(function (object $row) use ($modifiedTables): array {
                 $table = $row->TABLE_NAME;
                 $columns = Schema::connection('webposto')->getColumnListing($table);
                 $updated = in_array('updated_at', $columns, true)
                     ? DB::connection('webposto')->table($table)->max('updated_at') : null;
                 return ['name' => $table, 'records' => DB::connection('webposto')->table($table)->count(),
                     'columns' => count($columns), 'last_update' => $updated,
-                    'size_bytes' => (int) $row->DATA_LENGTH + (int) $row->INDEX_LENGTH];
+                    'size_bytes' => (int) $row->DATA_LENGTH + (int) $row->INDEX_LENGTH,
+                    'modified_sync' => in_array($table, $modifiedTables, true)];
             })->all();
         } catch (Throwable) {
             return [];
@@ -73,6 +85,24 @@ class AdminOverviewService
                     'empresa_nome' => $item->fantasia ?: ($item->razao ?: "Empresa {$item->empresa_codigo}"),
                     'base_url' => $item->base_url,
                     'active' => (bool) $item->ativo, 'last_used' => $item->ultimo_uso_em])->all();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    private function reloads(): array
+    {
+        try {
+            return WebPostoReloadRun::query()->latest('id')->get()
+                ->unique(fn (WebPostoReloadRun $run): string => $run->empresa_codigo.'-'.$run->resource)
+                ->map(fn (WebPostoReloadRun $run): array => [
+                    'id' => $run->id, 'empresa_codigo' => $run->empresa_codigo,
+                    'resource' => $run->resource, 'status' => $run->status,
+                    'processed_tables' => $run->processed_tables,
+                    'started_at' => $run->started_at?->toIso8601String(),
+                    'finished_at' => $run->finished_at?->toIso8601String(),
+                    'error' => $run->error,
+                ])->values()->all();
         } catch (Throwable) {
             return [];
         }

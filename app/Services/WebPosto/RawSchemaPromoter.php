@@ -2,7 +2,6 @@
 
 namespace App\Services\WebPosto;
 
-use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 class RawSchemaPromoter
@@ -17,24 +16,8 @@ class RawSchemaPromoter
     {
         $discovered = $this->discover($rows);
         $existing = array_flip(Schema::connection('webposto')->getColumnListing($tableName));
-        $missing = array_filter($discovered, fn (string $type, string $field): bool => ! isset($existing[$field]), ARRAY_FILTER_USE_BOTH);
 
-        if ($missing !== []) {
-            Schema::connection('webposto')->table($tableName, function (Blueprint $table) use ($missing): void {
-                foreach ($missing as $field => $type) {
-                    match ($type) {
-                        'boolean' => $table->boolean($field)->nullable(),
-                        'integer' => $table->bigInteger($field)->nullable(),
-                        'decimal' => $table->decimal($field, 24, 8)->nullable(),
-                        'json' => $table->json($field)->nullable(),
-                        'datetime' => $table->dateTime($field)->nullable(),
-                        default => $table->longText($field)->nullable(),
-                    };
-                }
-            });
-        }
-
-        return $discovered;
+        return array_intersect_key($discovered, $existing);
     }
 
     /** @param array<string, string> $schema */

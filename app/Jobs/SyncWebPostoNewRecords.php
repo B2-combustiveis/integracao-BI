@@ -5,10 +5,17 @@ namespace App\Jobs;
 use App\Models\IntegrationService;
 use App\Models\IntegrationServiceRun;
 use App\Services\WebPosto\ClienteEmpresaImporter;
+use App\Services\WebPosto\ClienteGrupoImporter;
 use App\Services\WebPosto\ClienteImporter;
+use App\Services\WebPosto\EmpresaImporter;
 use App\Services\WebPosto\ProdutoEmpresaImporter;
+use App\Services\WebPosto\ProdutoGrupoImporter;
 use App\Services\WebPosto\ProdutoImporter;
+use App\Services\WebPosto\ProdutoLmcLmpImporter;
+use App\Services\WebPosto\ProdutoSubgrupoImporter;
+use App\Services\WebPosto\RawResourceImporter;
 use App\Services\WebPosto\WebPostoClient;
+use App\Services\WebPosto\WebPostoCursorSynchronizer;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -21,17 +28,19 @@ class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
     use Queueable;
 
     public int $tries = 3;
-    public int $timeout = 900;
-    public int $uniqueFor = 900;
+    public int $timeout = 7200;
+    public int $uniqueFor = 7200;
 
-    public function __construct(public readonly int $serviceId)
-    {
+    public function __construct(
+        public readonly int $serviceId,
+        public readonly bool $reconcileFromStart = false,
+    ) {
         $this->onQueue('default');
     }
 
     public function uniqueId(): string
     {
-        return "webposto-new-records:{$this->serviceId}";
+        return "webposto-new-records:{$this->serviceId}:".($this->reconcileFromStart ? 'full' : 'incremental');
     }
 
     public function backoff(): array
@@ -39,7 +48,11 @@ class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
         return [30, 120];
     }
 
-    public function handle(WebPostoClient $client): void
+    public function handle(
+        WebPostoCursorSynchronizer $synchronizer,
+        WebPostoClient $client,
+        RawResourceImporter $rawImporter,
+    ): void
     {
         $service = IntegrationService::query()->findOrFail($this->serviceId);
         $run = IntegrationServiceRun::query()->create([
@@ -54,6 +67,8 @@ class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
 
         try {
             $empresa = $service->empresa_codigo;
+            $this->synchronizeParents($client, $empresa, $totals, $run);
+
             $routes = [
                 ['/INTEGRACAO/PRODUTO', ProdutoImporter::class, 'produtos', 'produtoCodigo', 1000],
                 ['/INTEGRACAO/PRODUTO_EMPRESA', ProdutoEmpresaImporter::class, 'produto_empresas', 'produtoCodigo', 2000],
@@ -62,13 +77,73 @@ class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
             ];
 
             foreach ($routes as [$endpoint, $importerClass, $table, $cursorColumn, $limit]) {
-                $cursor = (int) (DB::connection('webposto')->table($table)->max($cursorColumn) ?? 0);
-                $this->consumePages($client, $endpoint, $empresa, $cursor, $limit,
-                    function (mixed $payload) use ($importerClass, $empresa, &$totals): void {
-                        $stored = app($importerClass)->import($payload, $empresa);
-                        foreach ($totals as $key => $value) $totals[$key] += (int) ($stored[$key] ?? 0);
-                    });
+                $initialCursor = $this->reconcileFromStart
+                    ? 0
+                    : (int) (DB::connection('webposto')->table($table)->max($cursorColumn) ?? 0);
+                $stored = $synchronizer->synchronize(
+                    endpoint: $endpoint,
+                    empresaCodigo: $empresa,
+                    persist: fn (mixed $payload): array => app($importerClass)->import($payload, $empresa),
+                    query: ['limite' => $limit],
+                    cursor: [
+                        'initial_value' => $initialCursor,
+                        'prefer_initial_value' => true,
+                    ],
+                    initialQuery: [],
+                    integrationServiceRunId: $run->id,
+                    omitCursorWhenZero: true,
+                );
+                $this->add($totals, $stored);
+                $run->update($totals);
             }
+
+            $period = ['dataInicial' => '2000-01-01', 'dataFinal' => today()->toDateString()];
+            foreach ([
+                ['/INTEGRACAO/CAIXA', 'caixas'],
+                ['/INTEGRACAO/CAIXA_APRESENTADO', 'caixas_apresentados'],
+                ['/INTEGRACAO/LMC', 'lmcs'],
+            ] as [$endpoint, $table]) {
+                $initialCursor = $this->reconcileFromStart
+                    ? 0
+                    : (int) (DB::connection('webposto')->table($table)
+                        ->max($table === 'lmcs' ? 'lmcCodigo' : 'caixaCodigo') ?? 0);
+                $stored = $synchronizer->synchronize(
+                    endpoint: $endpoint,
+                    empresaCodigo: $empresa,
+                    persist: fn (mixed $payload, array $parameters): array => $rawImporter->import(
+                        $payload,
+                        $empresa,
+                        $table,
+                        $parameters,
+                    ),
+                    query: [...$period, 'limite' => 1000],
+                    cursor: [
+                        'initial_value' => $initialCursor,
+                        'prefer_initial_value' => true,
+                    ],
+                    initialQuery: [],
+                    integrationServiceRunId: $run->id,
+                    omitCursorWhenZero: true,
+                );
+                $this->add($totals, $stored);
+                $run->update($totals);
+            }
+
+            $stored = $synchronizer->synchronize(
+                endpoint: '/INTEGRACAO/VENDA',
+                empresaCodigo: $empresa,
+                persist: fn (mixed $payload, array $parameters): array => $rawImporter->import(
+                    $payload,
+                    $empresa,
+                    'vendas',
+                    $parameters,
+                ),
+                query: $period,
+                initialQuery: [],
+                integrationServiceRunId: $run->id,
+            );
+            $this->add($totals, $stored);
+            $run->update($totals);
 
             $run->update([...$totals, 'status' => 'success', 'finished_at' => now()]);
             $service->update(['last_completed_at' => now(),
@@ -82,22 +157,42 @@ class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
         }
     }
 
-    private function consumePages(WebPostoClient $client, string $endpoint, int $empresa,
-        int $cursor, int $limit, callable $consume): void
-    {
-        for ($page = 0; $page < 100; $page++) {
-            $result = $client->get($endpoint, $empresa, ['ultimoCodigo' => $cursor, 'limite' => $limit]);
+    /** @param array<string, int> $totals */
+    private function synchronizeParents(
+        WebPostoClient $client,
+        int $empresa,
+        array &$totals,
+        IntegrationServiceRun $run,
+    ): void {
+        $parents = [
+            ['/INTEGRACAO/EMPRESAS', EmpresaImporter::class, false],
+            ['/INTEGRACAO/GRUPO', ProdutoGrupoImporter::class, true],
+            ['/INTEGRACAO/CONSULTAR_SUB_GRUPO_REDE', ProdutoSubgrupoImporter::class, true],
+            ['/INTEGRACAO/PRODUTO_LMC_LMP', ProdutoLmcLmpImporter::class, true],
+            ['/INTEGRACAO/GRUPO_CLIENTE', ClienteGrupoImporter::class, true],
+        ];
+
+        foreach ($parents as [$endpoint, $importerClass, $withEmpresa]) {
+            $result = $client->get($endpoint, $empresa);
             if (! $result['response']->successful()) {
-                throw new RuntimeException("WebPosto respondeu HTTP {$result['response']->status()} em {$endpoint}.");
+                throw new RuntimeException('Falha ao consultar recurso pai do WebPosto.');
             }
-            $payload = $result['payload'];
-            $rows = is_array($payload['resultados'] ?? null) ? $payload['resultados'] : [];
-            if ($rows === []) return;
-            $consume($payload);
-            $next = is_numeric($payload['ultimoCodigo'] ?? null) ? (int) $payload['ultimoCodigo'] : 0;
-            if (count($rows) < $limit || $next <= $cursor) return;
-            $cursor = $next;
+
+            $stored = DB::connection('webposto')->transaction(
+                fn (): array => $withEmpresa
+                    ? app($importerClass)->import($result['payload'], $empresa)
+                    : app($importerClass)->import($result['payload']),
+            );
+            $this->add($totals, $stored);
+            $run->update($totals);
         }
-        throw new RuntimeException("Limite de paginação incremental atingido em {$endpoint}.");
+    }
+
+    /** @param array<string, int> $totals @param array<string, mixed> $stored */
+    private function add(array &$totals, array $stored): void
+    {
+        foreach ($totals as $field => $value) {
+            $totals[$field] += (int) ($stored[$field] ?? 0);
+        }
     }
 }

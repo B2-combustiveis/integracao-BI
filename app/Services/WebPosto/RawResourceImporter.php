@@ -2,6 +2,7 @@
 
 namespace App\Services\WebPosto;
 
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 
 class RawResourceImporter
@@ -20,6 +21,7 @@ class RawResourceImporter
         $connection = DB::connection('webposto');
         $now = now();
 
+        $records = [];
         foreach ($rows as $row) {
             if (! is_array($row)) {
                 $skipped++;
@@ -29,17 +31,30 @@ class RawResourceImporter
             $mapped = $this->schemaPromoter->map($row, $schema);
             $criteria = $this->keys->criteria($table, $mapped);
             if ($criteria === []) { $skipped++; continue; }
-            $query = $connection->table($table);
-            foreach ($criteria as $field => $value) $query->where($field, $value);
-            $existing = $query->first();
+            $key = $this->criteriaKey($criteria);
+            if (isset($records[$key])) $skipped++;
+            $records[$key] = ['mapped' => $mapped, 'criteria' => $criteria];
+        }
+
+        $existingRows = $this->existingRows($connection->table($table), $records);
+        $inserts = [];
+        foreach ($records as $key => $record) {
+            $mapped = $record['mapped'];
+            $criteria = $record['criteria'];
+            $existing = $existingRows[$key] ?? null;
             if ($existing === null) {
-                $connection->table($table)->insert([...$mapped, 'created_at' => $now, 'updated_at' => $now]);
+                $inserts[] = [...$mapped, 'created_at' => $now, 'updated_at' => $now];
                 $inserted++;
                 continue;
             }
             if (! $this->changed($existing, $mapped)) { $unchanged++; continue; }
-            $connection->table($table)->where('id', $existing->id)->update([...$mapped, 'updated_at' => $now]);
+            $query = $connection->table($table);
+            foreach ($criteria as $field => $value) $query->where($field, $value);
+            $query->update([...$mapped, 'updated_at' => $now]);
             $updated++;
+        }
+        foreach (array_chunk($inserts, 500) as $chunk) {
+            $connection->table($table)->insert($chunk);
         }
 
         return [
@@ -48,6 +63,59 @@ class RawResourceImporter
             'received' => count($rows), 'inserted' => $inserted, 'updated' => $updated,
             'unchanged' => $unchanged, 'skipped' => $skipped,
         ];
+    }
+
+    /**
+     * @param array<string, array{mapped: array<string, mixed>, criteria: array<string, mixed>}> $records
+     * @return array<string, object>
+     */
+    private function existingRows(Builder $query, array $records): array
+    {
+        if ($records === []) return [];
+        $criteriaSets = array_column($records, 'criteria');
+        $fields = array_keys($criteriaSets[0]);
+        $sameFields = collect($criteriaSets)->every(
+            fn (array $criteria): bool => array_keys($criteria) === $fields,
+        );
+
+        if ($sameFields && count($fields) === 1) {
+            $field = $fields[0];
+            $rows = $query->whereIn($field, array_column($criteriaSets, $field))->get();
+
+            return $rows->mapWithKeys(fn (object $row): array => [
+                $this->criteriaKey([$field => $row->{$field}]) => $row,
+            ])->all();
+        }
+
+        if ($sameFields && count($fields) === 2) {
+            [$fixed, $varying] = $fields;
+            $fixedValues = array_unique(array_column($criteriaSets, $fixed), SORT_REGULAR);
+            if (count($fixedValues) === 1) {
+                $rows = $query->where($fixed, $fixedValues[0])
+                    ->whereIn($varying, array_column($criteriaSets, $varying))
+                    ->get();
+
+                return $rows->mapWithKeys(fn (object $row): array => [
+                    $this->criteriaKey([$fixed => $row->{$fixed}, $varying => $row->{$varying}]) => $row,
+                ])->all();
+            }
+        }
+
+        $existing = [];
+        foreach ($records as $key => $record) {
+            $recordQuery = clone $query;
+            foreach ($record['criteria'] as $field => $value) $recordQuery->where($field, $value);
+            $row = $recordQuery->first();
+            if ($row !== null) $existing[$key] = $row;
+        }
+
+        return $existing;
+    }
+
+    /** @param array<string, mixed> $criteria */
+    private function criteriaKey(array $criteria): string
+    {
+        return json_encode($criteria, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
     /** @param array<string, mixed> $mapped */
