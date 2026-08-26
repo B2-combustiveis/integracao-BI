@@ -19,7 +19,7 @@ class LoadAbastecimentosFromStart extends Command
         $controlKey = $endpoint.':manual-initial';
         $resume = (bool) $this->option('resume');
         if (! $resume) {
-            DB::connection('webposto')->table('abastecimentos')->truncate();
+            DB::connection('webposto')->table('abastecimentos')->where('empresaCodigo', $empresa)->delete();
             WebPostoSyncControl::query()->where('empresa_codigo', $empresa)->where('endpoint', $controlKey)->delete();
             $this->info('abastecimentos zerada. Iniciando no cursor 1.');
         } else {

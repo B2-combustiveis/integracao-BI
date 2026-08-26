@@ -78,6 +78,30 @@ class ProdutoEmpresaImporterTest extends TestCase
         $this->assertSame(1, $result['skipped']);
     }
 
+    public function test_it_only_imports_rows_from_the_requested_company(): void
+    {
+        DB::connection('webposto')->table('produtos')->insert([
+            'empresaCodigo' => 9999,
+            'produtoCodigo' => 1103666,
+        ]);
+        $payload = $this->payload(5.89);
+        $foreign = $payload['resultados'][0];
+        $foreign['empresaCodigo'] = 9999;
+        $payload['resultados'][] = $foreign;
+
+        $result = app(ProdutoEmpresaImporter::class)->import($payload, 4604);
+
+        $this->assertSame(1, $result['inserted']);
+        $this->assertDatabaseHas('produto_empresas', [
+            'empresaCodigo' => 4604,
+            'produtoCodigo' => 1103666,
+        ], 'webposto');
+        $this->assertDatabaseMissing('produto_empresas', [
+            'empresaCodigo' => 9999,
+            'produtoCodigo' => 1103666,
+        ], 'webposto');
+    }
+
     private function payload(float $precoVenda): array
     {
         return ['ultimoCodigo' => 1103666, 'resultados' => [[

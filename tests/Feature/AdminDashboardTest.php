@@ -32,7 +32,7 @@ class AdminDashboardTest extends TestCase
 
         $this->withoutMiddleware(EnsureAdminSession::class)->get('/admin')
             ->assertOk()->assertSee('Integração BI')->assertSee('fornecedores')
-            ->assertSee('modified-sync')->assertSee('refresh-tables');
+            ->assertSee('new-records-sync')->assertSee('refresh-tables');
     }
 
     public function test_overview_endpoint_returns_json(): void
@@ -50,5 +50,10 @@ class AdminDashboardTest extends TestCase
         $this->withoutMiddleware(EnsureAdminSession::class)->get('/admin/services')
             ->assertOk()->assertSee('Serviços')->assertSee('Última execução')->assertSee('Ações')
             ->assertSee('Como funciona')->assertSee('Campos de controle no banco de integração');
+    }
+
+    public function test_financial_dashboard_is_not_exposed(): void
+    {
+        $this->withoutMiddleware(EnsureAdminSession::class)->get('/admin/financial')->assertNotFound();
     }
 }

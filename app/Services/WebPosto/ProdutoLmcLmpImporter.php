@@ -8,7 +8,9 @@ class ProdutoLmcLmpImporter
 {
     public function import(mixed $payload, int $empresaCodigo): array
     {
-        $resultados = is_array($payload) && array_is_list($payload) ? $payload : [];
+        $resultados = is_array($payload) && is_array($payload['resultados'] ?? null)
+            ? $payload['resultados']
+            : (is_array($payload) && array_is_list($payload) ? $payload : []);
         $validos = collect($resultados)
             ->filter(fn (mixed $produto): bool =>
                 is_array($produto)

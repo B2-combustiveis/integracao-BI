@@ -11,7 +11,8 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Symfony\Component\HttpFoundation\StreamedResponse;
+use App\Services\Integration\IntegrationRunXlsxExporter;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class IntegrationServiceController extends Controller
 {
@@ -36,32 +37,49 @@ class IntegrationServiceController extends Controller
     public function status(): JsonResponse
     {
         $serviceQuery = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-modified-records']);
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes']);
         $serviceIds = (clone $serviceQuery)->pluck('id');
 
-        $services = $serviceQuery
+        $serviceModels = $serviceQuery
             ->with(['runs' => fn ($query) => $query->latest()->limit(1)->withCount('changes')])
-            ->get()->map(function (IntegrationService $service): array {
+            ->get();
+
+        $completedRuns = IntegrationServiceRun::query()
+            ->whereIn('integration_service_id', $serviceIds)
+            ->whereIn('status', ['success', 'failed'])
+            ->with('service')->withCount('changes')
+            ->latest('finished_at')->limit(20)->get();
+
+        $runIds = $serviceModels->flatMap(fn (IntegrationService $service) => $service->runs)
+            ->pluck('id')->merge($completedRuns->pluck('id'))->unique()->values();
+        $newRecordsByRun = $runIds->isEmpty() ? [] : DB::table('integration_service_run_changes')
+            ->selectRaw('integration_service_run_id, resource, COUNT(*) as total')
+            ->whereIn('integration_service_run_id', $runIds)
+            ->where('action', 'inserted')
+            ->groupBy('integration_service_run_id', 'resource')
+            ->get()->groupBy('integration_service_run_id')
+            ->map(fn ($rows): array => $rows->mapWithKeys(
+                fn (object $row): array => [$row->resource => (int) $row->total],
+            )->all())->all();
+
+        $services = $serviceModels->map(function (IntegrationService $service) use ($newRecordsByRun): array {
                 $run = $service->runs->first();
                 return [
                     'id' => $service->id,
                     'name' => $service->name,
+                    'resource' => $service->resource,
                     'active' => $service->active,
                     'frequency_minutes' => $service->frequency_minutes,
                     'next_run_at' => $service->next_run_at?->toIso8601String(),
-                    'run' => $run ? $this->runData($run) : null,
+                    'run' => $run ? $this->runData($run, $newRecordsByRun[$run->id] ?? []) : null,
                 ];
             });
 
-        $completed = IntegrationServiceRun::query()
-            ->whereIn('integration_service_id', $serviceIds)
-            ->whereIn('status', ['success', 'failed'])
-            ->with('service')->withCount('changes')
-            ->latest('finished_at')->limit(20)->get()
-            ->map(fn (IntegrationServiceRun $run): array => [
-                ...$this->runData($run),
+        $completed = $completedRuns->map(fn (IntegrationServiceRun $run): array => [
+                ...$this->runData($run, $newRecordsByRun[$run->id] ?? []),
                 'service_id' => $run->integration_service_id,
                 'service_name' => $run->service->name,
+                'service_resource' => $run->service->resource,
                 'export_url' => route('admin.services.runs.export', [$run->service, $run]),
             ]);
 
@@ -87,13 +105,13 @@ class IntegrationServiceController extends Controller
                 'jobs' => $jobs,
             ],
             'generated_at' => now()->toIso8601String(),
-        ]);
+        ])->header('Cache-Control', 'no-store, no-cache, must-revalidate');
     }
 
     public function clearCompleted(): RedirectResponse
     {
         $serviceIds = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-modified-records'])
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes'])
             ->pluck('id');
         $deleted = IntegrationServiceRun::query()
             ->whereIn('integration_service_id', $serviceIds)
@@ -103,50 +121,28 @@ class IntegrationServiceController extends Controller
         return back()->with('status', $deleted.' execucoes concluidas removidas do historico.');
     }
 
-    public function export(IntegrationService $service, IntegrationServiceRun $run): StreamedResponse
+    public function clearServiceRuns(IntegrationService $service): RedirectResponse
+    {
+        $deleted = $service->runs()
+            ->whereIn('status', ['success', 'failed'])
+            ->delete();
+
+        return back()->with('status', $deleted.' relatórios concluídos removidos deste serviço.');
+    }
+
+    public function export(
+        IntegrationService $service,
+        IntegrationServiceRun $run,
+        IntegrationRunXlsxExporter $exporter,
+    ): BinaryFileResponse
     {
         abort_unless($run->integration_service_id === $service->id, 404);
-        $run->load('service');
-        $filename = sprintf('service-%d-execucao-%d-%s.csv', $service->id, $run->id, $run->started_at?->format('Ymd-His') ?? 'sem-data');
-
-        return response()->streamDownload(function () use ($run): void {
-            $output = fopen('php://output', 'wb');
-            fwrite($output, "\xEF\xBB\xBF");
-            fputcsv($output, [
-                'execucao_id', 'servico', 'empresa', 'status', 'inicio_execucao', 'fim_execucao',
-                'duracao_segundos', 'recebidos', 'novos_total', 'atualizados_total', 'inalterados',
-                'ignorados', 'recurso', 'tabela', 'acao', 'chave_natural',
-                'data_hora_atualizacao_origem', 'detectado_em', 'dados',
-            ], ';');
-
-            $duration = $run->started_at ? $run->started_at->diffInSeconds($run->finished_at ?? now()) : null;
-            $base = [
-                $run->id, $run->service->name, $run->service->empresa_codigo, $run->status,
-                $run->started_at?->format('Y-m-d H:i:s'), $run->finished_at?->format('Y-m-d H:i:s'),
-                $duration, $run->received, $run->inserted, $run->updated, $run->unchanged, $run->skipped,
-            ];
-
-            $hasChanges = false;
-            $run->changes()->orderBy('table_name')->orderBy('action')->orderBy('id')
-                ->chunkById(500, function ($changes) use ($output, $base, &$hasChanges): void {
-                    foreach ($changes as $change) {
-                        $hasChanges = true;
-                        fputcsv($output, [
-                            ...$base, $change->resource, $change->table_name,
-                            $change->action === 'inserted' ? 'novo' : 'atualizado',
-                            json_encode($change->natural_key, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                            $change->source_updated_at?->format('Y-m-d H:i:s'),
-                            $change->detected_at?->format('Y-m-d H:i:s'),
-                            json_encode($change->payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                        ], ';');
-                    }
-                });
-
-            if (! $hasChanges) {
-                fputcsv($output, [...$base, '', '', '', '', '', '', 'Nenhum registro novo ou atualizado nesta execucao'], ';');
-            }
-            fclose($output);
-        }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);
+        $filename = sprintf('service-%d-execucao-%d-%s.xlsx', $service->id, $run->id, $run->started_at?->format('Ymd-His') ?? 'sem-data');
+        return response()->download(
+            $exporter->create($run),
+            $filename,
+            ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+        )->deleteFileAfterSend(true);
     }
 
     public function update(Request $request, IntegrationService $service): RedirectResponse
@@ -163,7 +159,7 @@ class IntegrationServiceController extends Controller
     }
 
     /** @return array<string, mixed> */
-    private function runData(IntegrationServiceRun $run): array
+    private function runData(IntegrationServiceRun $run, array $newRecordsByResource = []): array
     {
         return [
             'id' => $run->id,
@@ -174,6 +170,7 @@ class IntegrationServiceController extends Controller
             'unchanged' => $run->unchanged,
             'skipped' => $run->skipped,
             'changes_count' => $run->changes_count ?? $run->changes()->count(),
+            'new_records_by_resource' => $newRecordsByResource,
             'duration_seconds' => $run->started_at
                 ? $run->started_at->diffInSeconds($run->finished_at ?? now()) : null,
             'started_at' => $run->started_at?->toIso8601String(),

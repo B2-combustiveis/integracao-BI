@@ -17,7 +17,8 @@ class InspectWebPostoPagination extends Command
         {--index= : index enviado}
         {--limit= : limite enviado}
         {--data-inicial= : dataInicial enviada}
-        {--data-final= : dataFinal enviada}';
+        {--data-final= : dataFinal enviada}
+        {--grupo-meta-codigo= : grupoMetaCodigo enviado}';
 
     protected $description = 'Inspeciona uma pagina WebPosto sem persistir os registros';
 
@@ -30,6 +31,7 @@ class InspectWebPostoPagination extends Command
             'limit' => 'limite',
             'data-inicial' => 'dataInicial',
             'data-final' => 'dataFinal',
+            'grupo-meta-codigo' => 'grupoMetaCodigo',
         ] as $option => $parameter) {
             if ($this->option($option) !== null) $query[$parameter] = $this->option($option);
         }

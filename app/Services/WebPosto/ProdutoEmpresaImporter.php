@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\DB;
 
 class ProdutoEmpresaImporter
 {
-    public function import(mixed $payload): array
+    public function import(mixed $payload, ?int $empresaCodigo = null): array
     {
         $resultados = is_array($payload) && is_array($payload['resultados'] ?? null)
             ? $payload['resultados']
@@ -18,6 +18,7 @@ class ProdutoEmpresaImporter
                 && isset($registro['empresaCodigo'], $registro['produtoCodigo'])
                 && is_numeric($registro['empresaCodigo'])
                 && is_numeric($registro['produtoCodigo'])
+                && ($empresaCodigo === null || (int) $registro['empresaCodigo'] === $empresaCodigo)
             )
             ->unique(fn (array $registro): string =>
                 (int) $registro['empresaCodigo'].'-'.(int) $registro['produtoCodigo']

@@ -62,7 +62,7 @@ class WebPostoCredentialRegistrationService
 
         $bi = $this->biSynchronizer->sync($payload);
         foreach ($companies as $company) {
-            $this->createPausedService((int) $company['empresaCodigo']);
+            $this->createPausedNewRecordsService((int) $company['empresaCodigo']);
         }
 
         return [
@@ -71,22 +71,26 @@ class WebPostoCredentialRegistrationService
         ];
     }
 
-    private function createPausedService(int $empresaCodigo): void
+    private function createPausedNewRecordsService(int $empresaCodigo): void
     {
         IntegrationService::query()->firstOrCreate([
-            'slug' => 'webposto-atualizacoes-por-data',
+            'slug' => 'webposto-novos-fornecedores',
             'empresa_codigo' => $empresaCodigo,
         ], [
-            'name' => 'Atualizacoes WebPosto por data',
+            'name' => 'Novos dados WebPosto',
             'category' => 'cadastros',
-            'resource' => 'webposto-modified-records',
+            'resource' => 'webposto-new-records',
             'frequency_minutes' => 5,
             'lookback_days' => 1,
             'active' => false,
             'settings' => [
-                'strategy' => 'modified_at',
+                'strategy' => 'ultimo_codigo',
                 'onboarding_status' => 'pending_initial_load',
-                'resources' => ['caixas','caixas-apresentados','clientes','fornecedores','lmcs','produto-empresas','titulos-pagar','titulos-receber'],
+                'resources' => [
+                    'fornecedores', 'compras', 'compra_itens', 'titulos_pagar',
+                    'clientes', 'vendas', 'venda_formas_pagamento',
+                    'titulos_receber', 'venda_itens', 'abastecimentos',
+                ],
             ],
             'next_run_at' => null,
             'last_error' => null,

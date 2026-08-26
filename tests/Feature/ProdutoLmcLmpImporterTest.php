@@ -52,6 +52,16 @@ class ProdutoLmcLmpImporterTest extends TestCase
         ], 'webposto');
     }
 
+    public function test_it_accepts_the_result_wrapper_used_by_the_new_records_service(): void
+    {
+        $result = app(ProdutoLmcLmpImporter::class)->import([
+            'resultados' => $this->payload('GASOLINA C COMUM'),
+        ], 4604);
+
+        $this->assertSame(1, $result['received']);
+        $this->assertSame(1, $result['inserted']);
+    }
+
     private function payload(string $descricao): array
     {
         return [[

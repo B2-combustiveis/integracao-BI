@@ -4,7 +4,6 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\AdminSessionController;
 use App\Http\Controllers\Admin\IntegrationServiceController;
-use App\Http\Controllers\Admin\FinancialDashboardController;
 use App\Http\Controllers\Admin\WebPostoCredentialController;
 
 Route::get('/', function () {
@@ -26,19 +25,17 @@ Route::middleware('guest')->group(function (): void {
 
 Route::prefix('admin')->middleware('auth.admin-session')->group(function (): void {
     Route::get('/', [AdminDashboardController::class, 'index'])->name('admin.dashboard');
-    Route::get('/financial', [FinancialDashboardController::class, 'index'])->name('admin.financial');
-    Route::get('/financial/export', [FinancialDashboardController::class, 'export'])->name('admin.financial.export');
     Route::get('/services', [AdminDashboardController::class, 'services'])->name('admin.services');
     Route::post('/credentials', [WebPostoCredentialController::class, 'store'])->name('admin.credentials.store');
     Route::get('/services/status', [IntegrationServiceController::class, 'status'])->name('admin.services.status');
     Route::post('/services/runs/completed/clear', [IntegrationServiceController::class, 'clearCompleted'])->name('admin.services.runs.clear-completed');
+    Route::post('/services/{service}/runs/clear', [IntegrationServiceController::class, 'clearServiceRuns'])->name('admin.services.runs.clear');
     Route::post('/services/{service}/pause', [IntegrationServiceController::class, 'pause'])->name('admin.services.pause');
     Route::post('/services/{service}/resume', [IntegrationServiceController::class, 'resume'])->name('admin.services.resume');
     Route::post('/services/{service}/run', [IntegrationServiceController::class, 'run'])->name('admin.services.run');
     Route::get('/services/{service}/runs/{run}/export', [IntegrationServiceController::class, 'export'])->name('admin.services.runs.export');
     Route::post('/services/{service}/settings', [IntegrationServiceController::class, 'update'])->name('admin.services.update');
     Route::get('/overview', [AdminDashboardController::class, 'overview'])->name('admin.overview');
-    Route::post('/tables/{table}/reload', [AdminDashboardController::class, 'reload'])->name('admin.tables.reload');
     Route::post('/tables/{table}/reload', [AdminDashboardController::class, 'reload'])->name('admin.tables.reload');
     Route::post('/logout', [AdminSessionController::class, 'destroy'])->name('admin.logout');
 });

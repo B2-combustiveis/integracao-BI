@@ -21,14 +21,9 @@ class LoadVendaItensFromStart extends Command
 
         if (! $resume) {
             $connection = DB::connection('webposto');
-            $connection->statement('SET FOREIGN_KEY_CHECKS=0');
-            try {
-                $connection->table('venda_itens')->truncate();
-            } finally {
-                $connection->statement('SET FOREIGN_KEY_CHECKS=1');
-            }
+            $connection->table('venda_itens')->where('empresaCodigo', $empresa)->delete();
             WebPostoSyncControl::query()->where('empresa_codigo', $empresa)->where('endpoint', $controlKey)->delete();
-            $this->info('venda_itens zerada. Iniciando no cursor 1.');
+            $this->info('venda_itens limpa para a empresa. Iniciando no cursor 1.');
         } else {
             $this->info('Retomando venda_itens do ultimo cursor confirmado.');
         }

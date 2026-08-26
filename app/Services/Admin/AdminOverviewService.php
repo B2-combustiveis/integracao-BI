@@ -3,7 +3,7 @@
 namespace App\Services\Admin;
 
 use App\Models\WebPostoReloadRun;
-use App\Services\WebPosto\WebPostoModifiedResourceCatalog;
+use App\Services\WebPosto\WebPostoNewRecordsResourceCatalog;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
@@ -11,7 +11,7 @@ use Throwable;
 class AdminOverviewService
 {
     public function __construct(
-        private readonly WebPostoModifiedResourceCatalog $modifiedResourceCatalog,
+        private readonly WebPostoNewRecordsResourceCatalog $newRecordsResourceCatalog,
     ) {
     }
 
@@ -52,13 +52,13 @@ class AdminOverviewService
     {
         try {
             $database = DB::connection('webposto')->getDatabaseName();
-            $modifiedTables = collect($this->modifiedResourceCatalog->all())
+            $newRecordsTables = collect($this->newRecordsResourceCatalog->all())
                 ->pluck('table')
                 ->all();
             $rows = DB::connection('webposto')->table('information_schema.TABLES')
                 ->where('TABLE_SCHEMA', $database)->where('TABLE_TYPE', 'BASE TABLE')
                 ->orderBy('TABLE_NAME')->get(['TABLE_NAME', 'DATA_LENGTH', 'INDEX_LENGTH']);
-            return $rows->map(function (object $row) use ($modifiedTables): array {
+            return $rows->map(function (object $row) use ($newRecordsTables): array {
                 $table = $row->TABLE_NAME;
                 $columns = Schema::connection('webposto')->getColumnListing($table);
                 $updated = in_array('updated_at', $columns, true)
@@ -66,7 +66,7 @@ class AdminOverviewService
                 return ['name' => $table, 'records' => DB::connection('webposto')->table($table)->count(),
                     'columns' => count($columns), 'last_update' => $updated,
                     'size_bytes' => (int) $row->DATA_LENGTH + (int) $row->INDEX_LENGTH,
-                    'modified_sync' => in_array($table, $modifiedTables, true)];
+                    'new_records_sync' => in_array($table, $newRecordsTables, true)];
             })->all();
         } catch (Throwable) {
             return [];

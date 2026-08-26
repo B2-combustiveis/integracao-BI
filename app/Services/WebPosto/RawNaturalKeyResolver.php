@@ -5,7 +5,7 @@ namespace App\Services\WebPosto;
 class RawNaturalKeyResolver
 {
     private const KEYS = [
-        'estoque_periodos' => ['codigo'], 'lmcs' => ['lmcCodigo'], 'compras' => ['compraCodigo'],
+        'estoque_periodos' => ['codigoUnidadeNegocio', 'codigo'], 'lmcs' => ['lmcCodigo'], 'compras' => ['compraCodigo'],
         'vendas' => ['vendaCodigo'], 'venda_itens' => ['vendaItemCodigo'],
         'venda_formas_pagamento' => ['codigo'], 'abastecimentos' => ['abastecimentoCodigo'],
         'fornecedores' => ['fornecedorCodigo'], 'funcionarios' => ['funcionarioCodigo'],
@@ -22,7 +22,7 @@ class RawNaturalKeyResolver
         'vales_funcionario' => ['funcionarioCreditoCodigo'], 'caixas' => ['caixaCodigo'],
         'caixas_apresentados' => ['caixaCodigo'], 'movimentos_conta' => ['movimentoContaCodigo'],
         'sats' => ['codigo'], 'nfces' => ['nfceCodigo'], 'nfes_saida' => ['notaCodigo'],
-        'notas_servico' => ['nfseCodigo'], 'compra_itens' => ['codigo'],
+        'notas_servico' => ['nfseCodigo'], 'compra_itens' => ['compraCodigo', 'sequencialItem'],
         'centros_custo' => ['centroCustoCodigo'], 'planos_conta_gerencial' => ['planoContaCodigo'],
         'mapas_desempenho' => ['funcionarioCodigo', 'produtoCodigo', 'grupoNome'],
         'despesas_financeiro_rede' => ['data', 'planoContaGerencialCodigo', 'descricaoDocumento'],
