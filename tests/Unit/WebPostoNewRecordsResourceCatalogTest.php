@@ -3,6 +3,8 @@
 namespace Tests\Unit;
 
 use App\Services\WebPosto\BicoImporter;
+use App\Services\WebPosto\CaixaApresentadoImporter;
+use App\Services\WebPosto\CaixaImporter;
 use App\Services\WebPosto\BombaImporter;
 use App\Services\WebPosto\FuncionarioFuncaoImporter;
 use App\Services\WebPosto\FuncionarioImporter;
@@ -27,7 +29,12 @@ class WebPostoNewRecordsResourceCatalogTest extends TestCase
         $this->assertSame('lmcCodigo', $catalog['lmcs']['key']);
         $this->assertSame(LmcImporter::class, $catalog['lmcs']['importer']);
         $this->assertSame('tanqueCodigo', $catalog['tanques']['key']);
+        $this->assertSame('full_reconcile', $catalog['tanques']['mode']);
+        $this->assertSame('2000-01-01', $catalog['tanques']['query']['dataInicial']);
         $this->assertSame(TanqueImporter::class, $catalog['tanques']['importer']);
+        $this->assertSame(['tanques'], collect($catalog)
+            ->filter(fn (array $definition): bool => ($definition['mode'] ?? null) === 'full_reconcile')
+            ->keys()->all());
         $this->assertSame('bombaCodigo', $catalog['bombas']['key']);
         $this->assertSame(BombaImporter::class, $catalog['bombas']['importer']);
         $this->assertSame('snapshot_new', $catalog['bombas']['mode']);
@@ -39,6 +46,14 @@ class WebPostoNewRecordsResourceCatalogTest extends TestCase
         $this->assertSame(FuncionarioFuncaoImporter::class, $catalog['funcionario_funcoes']['importer']);
         $this->assertSame('funcionarioCodigo', $catalog['funcionarios']['key']);
         $this->assertSame(FuncionarioImporter::class, $catalog['funcionarios']['importer']);
+        $this->assertSame('caixaCodigo', $catalog['caixas']['key']);
+        $this->assertSame(CaixaImporter::class, $catalog['caixas']['importer']);
+        $this->assertSame('/INTEGRACAO/CAIXA_APRESENTADO', $catalog['caixas_apresentados']['endpoint']);
+        $this->assertSame(CaixaApresentadoImporter::class, $catalog['caixas_apresentados']['importer']);
+        $this->assertLessThan(
+            array_search('caixas_apresentados', array_keys($catalog), true),
+            array_search('caixas', array_keys($catalog), true),
+        );
 
         $resources = array_keys($catalog);
         $positions = array_map(fn (string $resource): int => array_search($resource, $resources, true), [

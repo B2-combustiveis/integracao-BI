@@ -1,7 +1,6 @@
 <?php
 namespace App\Services\WebPosto;
 
-use App\Models\IntegrationService;
 use App\Models\WebPostoCredential;
 use App\Services\Bi\EmpresaBiSynchronizer;
 use Illuminate\Http\Client\ConnectionException;
@@ -49,6 +48,10 @@ class WebPostoCredentialRegistrationService
             throw new RuntimeException('A credencial foi aceita, mas nenhuma empresa valida foi retornada.');
         }
 
+        if ($companies->count() !== 1) {
+            throw new RuntimeException('Cada token deve identificar exatamente um posto.');
+        }
+
         $raw = DB::connection('webposto')->transaction(function () use ($payload, $companies, $baseUrl, $token): array {
             $storage = $this->empresaImporter->import($payload);
             foreach ($companies as $company) {
@@ -61,39 +64,10 @@ class WebPostoCredentialRegistrationService
         });
 
         $bi = $this->biSynchronizer->sync($payload);
-        foreach ($companies as $company) {
-            $this->createPausedNewRecordsService((int) $company['empresaCodigo']);
-        }
 
         return [
             'companies' => $companies->pluck('empresaCodigo')->map(fn (mixed $code): int => (int) $code)->all(),
             'storage' => ['webposto' => $raw, 'bi' => $bi],
         ];
-    }
-
-    private function createPausedNewRecordsService(int $empresaCodigo): void
-    {
-        IntegrationService::query()->firstOrCreate([
-            'slug' => 'webposto-novos-fornecedores',
-            'empresa_codigo' => $empresaCodigo,
-        ], [
-            'name' => 'Novos dados WebPosto',
-            'category' => 'cadastros',
-            'resource' => 'webposto-new-records',
-            'frequency_minutes' => 5,
-            'lookback_days' => 1,
-            'active' => false,
-            'settings' => [
-                'strategy' => 'ultimo_codigo',
-                'onboarding_status' => 'pending_initial_load',
-                'resources' => [
-                    'fornecedores', 'compras', 'compra_itens', 'titulos_pagar',
-                    'clientes', 'vendas', 'venda_formas_pagamento',
-                    'titulos_receber', 'venda_itens', 'abastecimentos',
-                ],
-            ],
-            'next_run_at' => null,
-            'last_error' => null,
-        ]);
     }
 }

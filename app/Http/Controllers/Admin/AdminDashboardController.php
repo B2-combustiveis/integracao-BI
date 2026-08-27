@@ -27,7 +27,7 @@ class AdminDashboardController extends Controller
 
     public function services(): View
     {
-        $services = IntegrationService::query()->with(['runs' => fn ($query) => $query->latest()->limit(5)->withCount('changes')])
+        $services = IntegrationService::query()->with(['runs' => fn ($query) => $query->latest()->limit(5)->withCount('changes')->with('companyRuns')])
             ->orderBy('category')->orderBy('name')->get();
         $runIds = $services->flatMap(fn (IntegrationService $service) => $service->runs)->pluck('id');
         $newRecordsByRun = $runIds->isEmpty()
@@ -53,7 +53,7 @@ class AdminDashboardController extends Controller
 
     public function reload(Request $request, string $table): RedirectResponse
     {
-        abort_unless(in_array($table, ['venda_itens', 'abastecimentos', 'bombas', 'bicos', 'tanques', 'cartoes', 'administradoras', 'produto_grupos', 'produto_subgrupos', 'produtos', 'produto_empresas', 'produto_lmc_lmp', 'lmcs', 'vales_funcionario', 'funcionario_funcoes', 'caixas', 'planos_conta_gerencial', 'planos_conta_contabil', 'contas_bancarias', 'movimentos_conta', 'funcionarios', 'estoque_periodos', 'fornecedores', 'compras', 'compra_itens', 'titulos_pagar', 'clientes', 'vendas', 'venda_formas_pagamento', 'titulos_receber'], true), 404);
+        abort_unless(in_array($table, ['venda_itens', 'abastecimentos', 'bombas', 'bicos', 'tanques', 'cartoes', 'administradoras', 'produto_grupos', 'produto_subgrupos', 'produtos', 'produto_empresas', 'produto_lmc_lmp', 'lmcs', 'vales_funcionario', 'funcionario_funcoes', 'caixas', 'caixas_apresentados', 'planos_conta_gerencial', 'planos_conta_contabil', 'contas_bancarias', 'movimentos_conta', 'funcionarios', 'estoque_periodos', 'fornecedores', 'compras', 'compra_itens', 'titulos_pagar', 'clientes', 'vendas', 'venda_formas_pagamento', 'titulos_receber'], true), 404);
         $empresa = (int) $request->validate(['empresa_codigo' => ['required', 'integer', 'min:1']])['empresa_codigo'];
         $active = DB::connection('webposto')->table('webposto_credentials')
             ->where('empresa_codigo', $empresa)->where('ativo', true)->exists();

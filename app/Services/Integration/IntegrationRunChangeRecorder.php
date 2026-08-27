@@ -18,6 +18,9 @@ class IntegrationRunChangeRecorder {
     'natural_key'=>$naturalKey,
     'source_updated_at'=>$this->date($change['source_updated_at'] ?? null),
     'payload'=>$change['payload'],
+    'before_payload'=>$change['before_payload'] ?? null,
+    'after_payload'=>$change['after_payload'] ?? null,
+    'changed_fields'=>$change['changed_fields'] ?? null,
     'detected_at'=>now(),
    ]);
   }

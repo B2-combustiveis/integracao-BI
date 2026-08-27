@@ -27,6 +27,7 @@ Route::prefix('admin')->middleware('auth.admin-session')->group(function (): voi
     Route::get('/', [AdminDashboardController::class, 'index'])->name('admin.dashboard');
     Route::get('/services', [AdminDashboardController::class, 'services'])->name('admin.services');
     Route::post('/credentials', [WebPostoCredentialController::class, 'store'])->name('admin.credentials.store');
+    Route::post('/credentials/{empresa}/synchronize', [WebPostoCredentialController::class, 'synchronize'])->name('admin.credentials.synchronize');
     Route::get('/services/status', [IntegrationServiceController::class, 'status'])->name('admin.services.status');
     Route::post('/services/runs/completed/clear', [IntegrationServiceController::class, 'clearCompleted'])->name('admin.services.runs.clear-completed');
     Route::post('/services/{service}/runs/clear', [IntegrationServiceController::class, 'clearServiceRuns'])->name('admin.services.runs.clear');

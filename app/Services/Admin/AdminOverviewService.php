@@ -2,6 +2,8 @@
 
 namespace App\Services\Admin;
 
+use App\Models\IntegrationService;
+use App\Models\WebPostoInitialSyncRun;
 use App\Models\WebPostoReloadRun;
 use App\Services\WebPosto\WebPostoNewRecordsResourceCatalog;
 use Illuminate\Support\Facades\DB;
@@ -27,7 +29,6 @@ class AdminOverviewService
             'summary' => [
                 'companies' => $this->safeCount('webposto', 'empresas'),
                 'credentials' => $this->safeCount('webposto', 'webposto_credentials'),
-                'active_credentials' => $this->safeCount('webposto', 'webposto_credentials', ['ativo' => 1]),
                 'api_tokens' => $this->safeCount('mysql', 'api_tokens'),
                 'tables' => count($tables),
             ],
@@ -52,13 +53,17 @@ class AdminOverviewService
     {
         try {
             $database = DB::connection('webposto')->getDatabaseName();
-            $newRecordsTables = collect($this->newRecordsResourceCatalog->all())
-                ->pluck('table')
-                ->all();
+            $catalog = $this->newRecordsResourceCatalog->all();
+            $newRecordsTables = collect($this->serviceResources('webposto-new-records'))
+                ->map(fn (string $resource) => $catalog[$resource]['table'] ?? null)
+                ->filter()->unique()->values()->all();
+            $reconciliationTables = collect($this->serviceResources('webposto-full-reconciliation'))
+                ->map(fn (string $resource) => $catalog[$resource]['table'] ?? null)
+                ->filter()->unique()->values()->all();
             $rows = DB::connection('webposto')->table('information_schema.TABLES')
                 ->where('TABLE_SCHEMA', $database)->where('TABLE_TYPE', 'BASE TABLE')
                 ->orderBy('TABLE_NAME')->get(['TABLE_NAME', 'DATA_LENGTH', 'INDEX_LENGTH']);
-            return $rows->map(function (object $row) use ($newRecordsTables): array {
+            return $rows->map(function (object $row) use ($newRecordsTables, $reconciliationTables): array {
                 $table = $row->TABLE_NAME;
                 $columns = Schema::connection('webposto')->getColumnListing($table);
                 $updated = in_array('updated_at', $columns, true)
@@ -66,8 +71,23 @@ class AdminOverviewService
                 return ['name' => $table, 'records' => DB::connection('webposto')->table($table)->count(),
                     'columns' => count($columns), 'last_update' => $updated,
                     'size_bytes' => (int) $row->DATA_LENGTH + (int) $row->INDEX_LENGTH,
-                    'new_records_sync' => in_array($table, $newRecordsTables, true)];
+                    'new_records_sync' => in_array($table, $newRecordsTables, true),
+                    'full_reconciliation_sync' => in_array($table, $reconciliationTables, true)];
             })->all();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /** @return array<int, string> */
+    private function serviceResources(string $serviceResource): array
+    {
+        try {
+            $service = IntegrationService::query()
+                ->where('resource', $serviceResource)
+                ->first();
+
+            return $service?->settings['resources'] ?? [];
         } catch (Throwable) {
             return [];
         }
@@ -76,15 +96,30 @@ class AdminOverviewService
     private function credentials(): array
     {
         try {
+            $runs = WebPostoInitialSyncRun::query()->latest('id')->get()
+                ->unique('empresa_codigo')
+                ->keyBy('empresa_codigo');
+
             return DB::connection('webposto')->table('webposto_credentials as credentials')
                 ->leftJoin('empresas', 'empresas.empresaCodigo', '=', 'credentials.empresa_codigo')
                 ->orderBy('credentials.empresa_codigo')
-                ->get(['credentials.empresa_codigo', 'credentials.base_url', 'credentials.ativo',
-                    'credentials.ultimo_uso_em', 'empresas.fantasia', 'empresas.razao'])
+                ->get(['credentials.empresa_codigo', 'credentials.implantacao_status',
+                    'empresas.fantasia', 'empresas.razao'])
                 ->map(fn (object $item): array => ['empresa_codigo' => $item->empresa_codigo,
                     'empresa_nome' => $item->fantasia ?: ($item->razao ?: "Empresa {$item->empresa_codigo}"),
-                    'base_url' => $item->base_url,
-                    'active' => (bool) $item->ativo, 'last_used' => $item->ultimo_uso_em])->all();
+                    'onboarding_status' => $item->implantacao_status,
+                    'initial_sync' => ($run = $runs->get($item->empresa_codigo)) ? [
+                        'id' => $run->id,
+                        'status' => $run->status,
+                        'current_resource' => $run->current_resource,
+                        'current_position' => $run->current_position,
+                        'total_resources' => $run->total_resources,
+                        'completed_resources' => $run->completed_resources ?? [],
+                        'started_at' => $run->started_at?->toIso8601String(),
+                        'finished_at' => $run->finished_at?->toIso8601String(),
+                        'error' => $run->error,
+                    ] : null,
+                ])->all();
         } catch (Throwable) {
             return [];
         }

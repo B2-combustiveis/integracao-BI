@@ -14,17 +14,41 @@ class WebPostoNewRecordsSyncService
         private readonly WebPostoCursorSynchronizer $synchronizer,
         private readonly IntegrationRunChangeRecorder $changeRecorder,
         private readonly WebPostoClient $client,
+        private readonly WebPostoPendingRecordService $pendingRecords,
     ) {}
 
     /** @param array<int, string> $resources @return array<string, array<string, int>> */
-    public function synchronize(int $empresa, array $resources, int $runId): array
+    public function synchronize(
+        int $empresa,
+        array $resources,
+        int $runId,
+        ?callable $onProgress = null,
+        bool $forceFullReconcile = false,
+    ): array
     {
         $results = [];
         foreach (array_values(array_unique($resources)) as $resource) {
             $definition = $this->catalog->get($resource);
+            if ($onProgress !== null) {
+                $onProgress('running', $resource, null);
+            }
+            $retried = $this->pendingRecords->retry($definition, $empresa, $runId, $resource);
+            $this->recordProgress($runId, $retried);
+            if ($forceFullReconcile || ($definition['mode'] ?? 'cursor') === 'full_reconcile') {
+                $synchronized = $this->synchronizeFullReconcile($definition, $empresa, $runId, $resource);
+                $results[$resource] = $this->mergeResults($retried, $synchronized);
+                if ($onProgress !== null) {
+                    $onProgress('completed', $resource, $results[$resource]);
+                }
+                continue;
+            }
             if (($definition['mode'] ?? 'cursor') === 'snapshot_new') {
-                $results[$resource] = $this->synchronizeSnapshotNew($definition, $empresa, $runId, $resource);
-                $this->recordProgress($runId, $results[$resource]);
+                $synchronized = $this->synchronizeSnapshotNew($definition, $empresa, $runId, $resource);
+                $results[$resource] = $this->mergeResults($retried, $synchronized);
+                $this->recordProgress($runId, $synchronized);
+                if ($onProgress !== null) {
+                    $onProgress('completed', $resource, $results[$resource]);
+                }
                 continue;
             }
             $key = $definition['key'];
@@ -36,7 +60,7 @@ class WebPostoNewRecordsSyncService
                 $query[$definition['query_company_field']] = $empresa;
             }
             $query['limite'] = $definition['limit'];
-            $results[$resource] = $this->synchronizer->synchronize(
+            $synchronized = $this->synchronizer->synchronize(
                 endpoint: $definition['endpoint'],
                 empresaCodigo: $empresa,
                 persist: function (mixed $payload, array $parameters) use ($definition, $empresa, $runId, $resource): array {
@@ -79,6 +103,7 @@ class WebPostoNewRecordsSyncService
                             'payload' => $row,
                         ])->values()->all();
                     $this->changeRecorder->record($runId, $resource, $definition['table'], $changes);
+                    $this->pendingRecords->storeMissing($definition, $empresa, $runId, $resource, $newRows->all(), $parameters);
                     $this->recordProgress($runId, [...$stored, 'received' => $rows->count()]);
                     return $stored;
                 },
@@ -93,10 +118,113 @@ class WebPostoNewRecordsSyncService
                 controlKey: $definition['endpoint'].':new-records',
                 omitCursorWhenZero: true,
             );
+            $results[$resource] = $this->mergeResults($retried, $synchronized);
+            if ($onProgress !== null) {
+                $onProgress('completed', $resource, $results[$resource]);
+            }
         }
         return $results;
     }
 
+    /** @param array<string, mixed> $definition @return array<string, int> */
+    private function synchronizeFullReconcile(array $definition, int $empresa, int $runId, string $resource): array
+    {
+        $query = $definition['query'];
+        $query['limite'] = (int) ($definition['limit'] ?? $query['limite'] ?? 1000);
+
+        return $this->synchronizer->synchronize(
+            endpoint: $definition['endpoint'],
+            empresaCodigo: $empresa,
+            persist: function (mixed $payload, array $parameters) use ($definition, $empresa, $runId, $resource): array {
+                $companyField = $definition['company_field'] ?? 'empresaCodigo';
+                $key = $definition['key'];
+                $rows = collect(is_array($payload) && is_array($payload['resultados'] ?? null)
+                    ? $payload['resultados'] : [])
+                    ->filter(fn ($row) => is_array($row)
+                        && isset($row[$key])
+                        && (! isset($row[$companyField]) || (int) $row[$companyField] === $empresa))
+                    ->map(fn (array $row): array => isset($row[$companyField])
+                        ? $row
+                        : [$companyField => $empresa, ...$row])
+                    ->unique(fn (array $row): string => (string) $row[$key])
+                    ->values();
+                $keys = $rows->pluck($key)->all();
+                $before = DB::connection('webposto')->table($definition['table'])
+                    ->where($companyField, $empresa)
+                    ->whereIn($key, $keys)
+                    ->get()
+                    ->mapWithKeys(fn (object $row): array => [(string) $row->{$key} => (array) $row])
+                    ->all();
+                $filteredPayload = is_array($payload)
+                    ? [...$payload, 'resultados' => $rows->all()]
+                    : ['resultados' => $rows->all()];
+                $stored = app($definition['importer'])->import($filteredPayload, $empresa, $parameters);
+                $after = DB::connection('webposto')->table($definition['table'])
+                    ->where($companyField, $empresa)
+                    ->whereIn($key, $keys)
+                    ->get()
+                    ->mapWithKeys(fn (object $row): array => [(string) $row->{$key} => (array) $row])
+                    ->all();
+                $changes = $rows->map(function (array $row) use ($before, $after, $key, $empresa, $definition): ?array {
+                    $value = (string) $row[$key];
+                    if (! isset($after[$value])) {
+                        return null;
+                    }
+                    $beforePayload = isset($before[$value])
+                        ? collect($before[$value])->except(['created_at', 'updated_at'])->all()
+                        : null;
+                    $afterPayload = collect($after[$value])
+                        ->except(['created_at', 'updated_at'])->all();
+                    $changedFields = $beforePayload === null
+                        ? array_keys($afterPayload)
+                        : collect(array_unique([
+                            ...array_keys($beforePayload),
+                            ...array_keys($afterPayload),
+                        ]))->filter(fn (string $field): bool =>
+                            ($beforePayload[$field] ?? null) != ($afterPayload[$field] ?? null)
+                        )->values()->all();
+                    $action = $beforePayload === null
+                        ? 'inserted'
+                        : ($changedFields === [] ? null : 'updated');
+                    if ($action === null) {
+                        return null;
+                    }
+
+                    return [
+                        'action' => $action,
+                        'natural_key' => ['empresaCodigo' => $empresa, $key => $row[$key]],
+                        'source_updated_at' => $row[$definition['updated_field']] ?? null,
+                        'payload' => $row,
+                        'before_payload' => $beforePayload,
+                        'after_payload' => $afterPayload,
+                        'changed_fields' => $changedFields,
+                    ];
+                })->filter()->values()->all();
+                $this->changeRecorder->record($runId, $resource, $definition['table'], $changes);
+                $this->pendingRecords->storeMissing(
+                    $definition,
+                    $empresa,
+                    $runId,
+                    $resource,
+                    $rows->all(),
+                    $parameters,
+                );
+                $stored['received'] = $rows->count();
+                $this->recordProgress($runId, $stored);
+
+                return $stored;
+            },
+            query: $query,
+            cursor: [
+                'initial_value' => 1,
+                'prefer_initial_value' => true,
+                ...($definition['cursor'] ?? []),
+            ],
+            initialQuery: null,
+            integrationServiceRunId: $runId,
+            controlKey: $definition['endpoint'].':full-reconcile',
+        );
+    }
     /** @param array<string, mixed> $definition @return array<string, int> */
     private function synchronizeSnapshotNew(array $definition, int $empresa, int $runId, string $resource): array
     {
@@ -141,6 +269,7 @@ class WebPostoNewRecordsSyncService
             'payload' => $row,
         ])->values()->all();
         $this->changeRecorder->record($runId, $resource, $definition['table'], $changes);
+        $this->pendingRecords->storeMissing($definition, $empresa, $runId, $resource, $newRows);
         $stored['received'] = count($rows);
         return $stored;
     }
@@ -157,5 +286,16 @@ class WebPostoNewRecordsSyncService
             $progress[$field] = (int) $run->{$field} + (int) ($stored[$field] ?? 0);
         }
         $run->update($progress);
+    }
+
+    /** @param array<string, int> $first @param array<string, int> $second @return array<string, int> */
+    private function mergeResults(array $first, array $second): array
+    {
+        $merged = $second;
+        foreach (['received', 'inserted', 'updated', 'unchanged', 'skipped'] as $field) {
+            $merged[$field] = (int) ($first[$field] ?? 0) + (int) ($second[$field] ?? 0);
+        }
+
+        return $merged;
     }
 }

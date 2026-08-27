@@ -37,17 +37,17 @@ class IntegrationServiceController extends Controller
     public function status(): JsonResponse
     {
         $serviceQuery = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes']);
+            ->whereIn('resource', ['webposto-new-records', 'webposto-full-reconciliation', 'webposto-database-changes']);
         $serviceIds = (clone $serviceQuery)->pluck('id');
 
         $serviceModels = $serviceQuery
-            ->with(['runs' => fn ($query) => $query->latest()->limit(1)->withCount('changes')])
+            ->with(['runs' => fn ($query) => $query->latest()->limit(1)->withCount('changes')->with('companyRuns')])
             ->get();
 
         $completedRuns = IntegrationServiceRun::query()
             ->whereIn('integration_service_id', $serviceIds)
-            ->whereIn('status', ['success', 'failed'])
-            ->with('service')->withCount('changes')
+            ->whereIn('status', ['success', 'partial', 'failed'])
+            ->with(['service', 'companyRuns'])->withCount('changes')
             ->latest('finished_at')->limit(20)->get();
 
         $runIds = $serviceModels->flatMap(fn (IntegrationService $service) => $service->runs)
@@ -111,11 +111,11 @@ class IntegrationServiceController extends Controller
     public function clearCompleted(): RedirectResponse
     {
         $serviceIds = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes'])
+            ->whereIn('resource', ['webposto-new-records', 'webposto-full-reconciliation', 'webposto-database-changes'])
             ->pluck('id');
         $deleted = IntegrationServiceRun::query()
             ->whereIn('integration_service_id', $serviceIds)
-            ->whereIn('status', ['success', 'failed'])
+            ->whereIn('status', ['success', 'partial', 'failed'])
             ->delete();
 
         return back()->with('status', $deleted.' execucoes concluidas removidas do historico.');
@@ -124,7 +124,7 @@ class IntegrationServiceController extends Controller
     public function clearServiceRuns(IntegrationService $service): RedirectResponse
     {
         $deleted = $service->runs()
-            ->whereIn('status', ['success', 'failed'])
+            ->whereIn('status', ['success', 'partial', 'failed'])
             ->delete();
 
         return back()->with('status', $deleted.' relatórios concluídos removidos deste serviço.');
@@ -172,10 +172,28 @@ class IntegrationServiceController extends Controller
             'changes_count' => $run->changes_count ?? $run->changes()->count(),
             'new_records_by_resource' => $newRecordsByResource,
             'duration_seconds' => $run->started_at
-                ? $run->started_at->diffInSeconds($run->finished_at ?? now()) : null,
+                ? (int) floor($run->started_at->diffInSeconds($run->finished_at ?? now())) : null,
             'started_at' => $run->started_at?->toIso8601String(),
             'finished_at' => $run->finished_at?->toIso8601String(),
             'error' => $run->error,
+            'companies' => $run->companyRuns->sortBy('position')->values()->map(
+                fn ($company): array => [
+                    'empresa_codigo' => $company->empresa_codigo,
+                    'empresa_nome' => $company->empresa_nome,
+                    'position' => $company->position,
+                    'status' => $company->status,
+                    'current_resource' => $company->current_resource,
+                    'received' => $company->received,
+                    'inserted' => $company->inserted,
+                    'skipped' => $company->skipped,
+                    'resource_results' => $company->resource_results ?? [],
+                    'duration_seconds' => $company->started_at
+                        ? (int) floor($company->started_at->diffInSeconds($company->finished_at ?? now())) : null,
+                    'started_at' => $company->started_at?->toIso8601String(),
+                    'finished_at' => $company->finished_at?->toIso8601String(),
+                    'error' => $company->error,
+                ],
+            )->all(),
         ];
     }
 }

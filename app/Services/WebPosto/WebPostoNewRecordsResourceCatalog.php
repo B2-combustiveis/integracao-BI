@@ -86,6 +86,7 @@ class WebPostoNewRecordsResourceCatalog
                 'endpoint' => '/INTEGRACAO/TANQUE',
                 'table' => 'tanques',
                 'key' => 'tanqueCodigo',
+                'mode' => 'full_reconcile',
                 'limit' => 1000,
                 'query' => [
                     'dataInicial' => '2000-01-01',
@@ -100,6 +101,8 @@ class WebPostoNewRecordsResourceCatalog
                 'key' => 'bombaCodigo',
                 'natural_keys' => ['bombaCodigo'],
                 'mode' => 'snapshot_new',
+                'limit' => 1000,
+                'cursor' => ['single_page' => true],
                 'query' => [
                     'dataInicial' => '2000-01-01',
                     'dataFinal' => now()->toDateString(),
@@ -141,6 +144,30 @@ class WebPostoNewRecordsResourceCatalog
                     'dataFinal' => now()->toDateString(),
                 ],
                 'importer' => FuncionarioImporter::class,
+                'updated_field' => 'dataHoraAtualizacao',
+            ],
+            'caixas' => [
+                'endpoint' => '/INTEGRACAO/CAIXA',
+                'table' => 'caixas',
+                'key' => 'caixaCodigo',
+                'limit' => 1000,
+                'query' => [
+                    'dataInicial' => '2000-01-01',
+                    'dataFinal' => now()->toDateString(),
+                ],
+                'importer' => CaixaImporter::class,
+                'updated_field' => 'dataHoraAtualizacao',
+            ],
+            'caixas_apresentados' => [
+                'endpoint' => '/INTEGRACAO/CAIXA_APRESENTADO',
+                'table' => 'caixas_apresentados',
+                'key' => 'caixaCodigo',
+                'limit' => 1000,
+                'query' => [
+                    'dataInicial' => '2000-01-01',
+                    'dataFinal' => now()->toDateString(),
+                ],
+                'importer' => CaixaApresentadoImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
             ],
             'fornecedores' => [

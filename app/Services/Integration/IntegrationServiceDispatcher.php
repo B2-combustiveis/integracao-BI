@@ -25,7 +25,8 @@ class IntegrationServiceDispatcher
             $service->update(['next_run_at' => now()->addMinutes($service->frequency_minutes)]);
             match ($service->resource) {
                 'webposto-database-changes' => SyncWebPostoDatabase::dispatch($service->id),
-                'webposto-new-records' => SyncWebPostoNewRecords::dispatch($service->id),
+                'webposto-new-records',
+                'webposto-full-reconciliation' => SyncWebPostoNewRecords::dispatch($service->id),
                 default => throw new \InvalidArgumentException("Recurso {$service->resource} não possui job."),
             };
         });

@@ -12,7 +12,9 @@ class CartaoImporter {
   $valid=[];$skipped=0;
   foreach($rows as $row){
    if(!is_array($row)||(int)($row['empresaCodigo']??0)!==$empresa||!isset($row['cartaoCodigo'],$row['vendaCodigo'],$row['administradoraCodigo'],$row['centroCustoCodigo'])){$skipped++;continue;}
-   if(!isset($sales[(string)$row['vendaCodigo']],$admins[(string)$row['administradoraCodigo']],$centers[(string)$row['centroCustoCodigo']])){$skipped++;continue;}
+   $saleOptional=(int)$row['vendaCodigo']===0 && ($row['tipoInclusao']??null)==='Troca de Valores';
+   if((!$saleOptional&&!isset($sales[(string)$row['vendaCodigo']]))||!isset($admins[(string)$row['administradoraCodigo']],$centers[(string)$row['centroCustoCodigo']])){$skipped++;continue;}
+   if($saleOptional)$row['vendaCodigo']=null;
    $valid[]=$row;
   }
   $stored=$this->raw->import(['resultados'=>$valid],$empresa,'cartoes',$parameters);

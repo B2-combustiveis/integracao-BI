@@ -24,4 +24,9 @@ class IntegrationServiceRun extends Model
     {
         return $this->hasMany(IntegrationServiceRunChange::class);
     }
+
+    public function companyRuns(): HasMany
+    {
+        return $this->hasMany(IntegrationServiceCompanyRun::class);
+    }
 }

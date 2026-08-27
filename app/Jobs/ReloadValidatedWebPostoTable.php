@@ -84,7 +84,12 @@ class ReloadValidatedWebPostoTable implements ShouldQueue,ShouldBeUnique {
    }elseif($run->resource==='caixas'){
     $exit=Artisan::call('webposto:load-caixas',['empresa'=>$run->empresa_codigo]);
     if($exit!==0)throw new RuntimeException('Falha na carga de caixas.');
-    $done=['caixas'];
+    $run->update(['processed_tables'=>['caixas']]);
+    $this->load('webposto:load-caixas-apresentados','/INTEGRACAO/CAIXA_APRESENTADO:manual-initial',$run->empresa_codigo);
+    $done=['caixas','caixas_apresentados'];
+   }elseif($run->resource==='caixas_apresentados'){
+    $this->load('webposto:load-caixas-apresentados','/INTEGRACAO/CAIXA_APRESENTADO:manual-initial',$run->empresa_codigo);
+    $done=['caixas_apresentados'];
    }elseif(in_array($run->resource,['planos_conta_gerencial','planos_conta_contabil'],true)){
     $tipo=$run->resource==='planos_conta_gerencial'?'gerencial':'contabil';
     $exit=Artisan::call('webposto:load-planos-conta',['tipo'=>$tipo,'empresa'=>$run->empresa_codigo]);
