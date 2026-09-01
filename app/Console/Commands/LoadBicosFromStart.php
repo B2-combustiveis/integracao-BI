@@ -10,7 +10,7 @@ class LoadBicosFromStart extends Command {
  public function handle(WebPostoCursorSynchronizer $sync,BicoImporter $importer): int {
   $empresa=(int)$this->argument('empresa');$key='/INTEGRACAO/BICO:manual-initial';$resume=(bool)$this->option('resume');
   if(!$resume){DB::connection('webposto')->table('bicos')->where('empresaCodigo',$empresa)->delete();WebPostoSyncControl::where('empresa_codigo',$empresa)->where('endpoint',$key)->delete();}
-  $totals=$sync->synchronize(endpoint:'/INTEGRACAO/BICO',empresaCodigo:$empresa,persist:fn($payload,$parameters)=>$importer->import($payload,$empresa,$parameters),query:['dataInicial'=>'2000-01-01','dataFinal'=>now()->toDateString(),'limite'=>1000],cursor:['initial_value'=>1,'prefer_initial_value'=>!$resume],initialQuery:null,maxPages:max(1,(int)$this->option('pages')),controlKey:$key);
+  $totals=$sync->synchronize(endpoint:'/INTEGRACAO/BICO',empresaCodigo:$empresa,persist:fn($payload,$parameters)=>$importer->import($payload,$empresa,$parameters),query:['dataInicial'=>'2000-01-01','dataFinal'=>now()->toDateString(),'limite'=>1000,'empresaCodigo'=>$empresa],cursor:['initial_value'=>1,'prefer_initial_value'=>!$resume],initialQuery:null,maxPages:max(1,(int)$this->option('pages')),controlKey:$key);
   $this->info(json_encode($totals));
   return self::SUCCESS;
  }

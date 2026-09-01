@@ -9,6 +9,8 @@ use Illuminate\View\View;
 use App\Models\IntegrationService;
 use App\Jobs\ReloadValidatedWebPostoTable;
 use App\Models\WebPostoReloadRun;
+use App\Models\WebPostoInitialSyncRun;
+use App\Models\WebPostoCredential;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,9 +22,13 @@ class AdminDashboardController extends Controller
         return view('admin.dashboard', ['overview' => $overview->get()]);
     }
 
-    public function overview(AdminOverviewService $overview): JsonResponse
+    public function overview(Request $request, AdminOverviewService $overview): JsonResponse
     {
-        return response()->json($overview->get());
+        $empresa = $request->validate([
+            'empresa_codigo' => ['nullable', 'integer', 'min:1'],
+        ])['empresa_codigo'] ?? null;
+
+        return response()->json($overview->get($empresa ? (int) $empresa : null));
     }
 
     public function services(): View
@@ -53,11 +59,23 @@ class AdminDashboardController extends Controller
 
     public function reload(Request $request, string $table): RedirectResponse
     {
-        abort_unless(in_array($table, ['venda_itens', 'abastecimentos', 'bombas', 'bicos', 'tanques', 'cartoes', 'administradoras', 'produto_grupos', 'produto_subgrupos', 'produtos', 'produto_empresas', 'produto_lmc_lmp', 'lmcs', 'vales_funcionario', 'funcionario_funcoes', 'caixas', 'caixas_apresentados', 'planos_conta_gerencial', 'planos_conta_contabil', 'contas_bancarias', 'movimentos_conta', 'funcionarios', 'estoque_periodos', 'fornecedores', 'compras', 'compra_itens', 'titulos_pagar', 'clientes', 'vendas', 'venda_formas_pagamento', 'titulos_receber'], true), 404);
+        abort_unless(in_array($table, ['venda_itens', 'abastecimentos', 'bombas', 'bicos', 'tanques', 'cartoes', 'administradoras', 'produto_grupos', 'produto_subgrupos', 'produtos', 'produto_empresas', 'produto_lmc_lmp', 'lmcs', 'vales_funcionario', 'funcionario_funcoes', 'caixas', 'caixas_apresentados', 'planos_conta_gerencial', 'planos_conta_contabil', 'contas_bancarias', 'movimentos_conta', 'funcionarios', 'estoque_periodos', 'fornecedores', 'compras', 'compra_itens', 'titulos_pagar', 'cliente_grupos', 'clientes', 'cliente_empresas', 'formas_pagamento', 'pdvs', 'vendas', 'venda_formas_pagamento', 'titulos_receber'], true), 404);
         $empresa = (int) $request->validate(['empresa_codigo' => ['required', 'integer', 'min:1']])['empresa_codigo'];
-        $active = DB::connection('webposto')->table('webposto_credentials')
-            ->where('empresa_codigo', $empresa)->where('ativo', true)->exists();
-        abort_unless($active, 422, 'A empresa nao possui credencial ativa.');
+        $credential = WebPostoCredential::query()
+            ->where('empresa_codigo', $empresa)
+            ->where('ativo', true)
+            ->first();
+        abort_unless($credential, 422, 'A empresa nao possui credencial ativa.');
+        abort_unless(
+            $credential->implantacao_status === WebPostoCredential::STATUS_SINCRONIZADO,
+            422,
+            'A empresa precisa concluir a carga inicial antes de executar recargas.'
+        );
+        $initialLoadRunning = WebPostoInitialSyncRun::query()
+            ->where('empresa_codigo', $empresa)
+            ->whereIn('status', ['queued', 'running'])
+            ->exists();
+        abort_if($initialLoadRunning, 422, 'A carga inicial desta empresa esta em andamento.');
         $running = WebPostoReloadRun::query()->where('empresa_codigo', $empresa)
             ->where('resource', $table)->whereIn('status', ['queued', 'running'])->exists();
         if ($running) return back()->with('status', 'A recarga de '.$table.' ja esta aguardando ou executando.');

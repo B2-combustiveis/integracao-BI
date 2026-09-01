@@ -1,6 +1,6 @@
 <?php
 namespace App\Jobs;
-use App\Models\{WebPostoReloadRun,WebPostoSyncControl};
+use App\Models\{WebPostoCredential,WebPostoInitialSyncRun,WebPostoReloadRun,WebPostoSyncControl};
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\{ShouldBeUnique,ShouldQueue};
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -16,10 +16,19 @@ class ReloadValidatedWebPostoTable implements ShouldQueue,ShouldBeUnique {
   $run=WebPostoReloadRun::find($this->runId);
   return $run ? $run->empresa_codigo.':'.$run->resource : (string)$this->runId;
  }
- public function handle(): void {
+ public function handle(bool $duringInitialLoad=false): void {
   $run=WebPostoReloadRun::findOrFail($this->runId);
-  $run->update(['status'=>'running','started_at'=>now(),'error'=>null]);
   try {
+   $credential=WebPostoCredential::query()->where('empresa_codigo',$run->empresa_codigo)->where('ativo',true)->first();
+   if(!$credential||(!$duringInitialLoad&&$credential->implantacao_status!==WebPostoCredential::STATUS_SINCRONIZADO)){
+    throw new RuntimeException('A empresa precisa estar sincronizada antes de executar recargas.');
+   }
+   if(!$duringInitialLoad){
+    $initialLoadRunning=WebPostoInitialSyncRun::query()->where('empresa_codigo',$run->empresa_codigo)
+     ->whereIn('status',['queued','running'])->exists();
+    if($initialLoadRunning)throw new RuntimeException('A carga inicial desta empresa esta em andamento.');
+   }
+   $run->update(['status'=>'running','started_at'=>now(),'error'=>null]);
    if($run->resource==='venda_itens'){
     DB::connection('webposto')->table('abastecimentos')->where('empresaCodigo',$run->empresa_codigo)->delete();
     $this->load('webposto:load-venda-itens','/INTEGRACAO/VENDA_ITEM:manual-initial',$run->empresa_codigo);
@@ -134,12 +143,23 @@ class ReloadValidatedWebPostoTable implements ShouldQueue,ShouldBeUnique {
    }elseif($run->resource==='titulos_pagar'){
     $this->loadIncremental('titulos_pagar','/INTEGRACAO/TITULO_PAGAR:manual-initial',$run->empresa_codigo);
     $done=['titulos_pagar'];
+   }elseif($run->resource==='cliente_grupos'){
+    $exit=Artisan::call('webposto:load-cliente-grupos',['empresa'=>$run->empresa_codigo]);
+    if($exit!==0)throw new RuntimeException('Falha na carga de grupos de clientes.');
+    $done=['cliente_grupos'];
    }elseif($run->resource==='clientes'){
     DB::connection('webposto')->table('cliente_empresas')->where('empresaCodigo',$run->empresa_codigo)->delete();
     $this->loadIncremental('clientes','/INTEGRACAO/CLIENTE:manual-initial',$run->empresa_codigo);
     $run->update(['processed_tables'=>['clientes']]);
     $this->loadIncremental('cliente_empresas','/INTEGRACAO/CLIENTE_EMPRESA:manual-initial',$run->empresa_codigo);
     $done=['clientes','cliente_empresas'];
+   }elseif($run->resource==='cliente_empresas'){
+    $this->loadIncremental('cliente_empresas','/INTEGRACAO/CLIENTE_EMPRESA:manual-initial',$run->empresa_codigo);
+    $done=['cliente_empresas'];
+   }elseif(in_array($run->resource,['formas_pagamento','pdvs'],true)){
+    $exit=Artisan::call('webposto:load-reference-snapshot',['resource'=>$run->resource,'empresa'=>$run->empresa_codigo]);
+    if($exit!==0)throw new RuntimeException('Falha na carga de '.$run->resource.'.');
+    $done=[$run->resource];
    }elseif($run->resource==='vendas'){
     $connection=DB::connection('webposto');
     foreach(['cartoes','abastecimentos','venda_itens','venda_formas_pagamento'] as $table){

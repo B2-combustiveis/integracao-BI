@@ -13,12 +13,14 @@ use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
-class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
+class SyncWebPostoNewRecords implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
     public int $tries = 1;
+
     public int $timeout = 7200;
+
     public int $uniqueFor = 7200;
 
     public function __construct(public readonly int $serviceId)
@@ -62,6 +64,7 @@ class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
             $message = 'Nenhum posto sincronizado e ativo foi encontrado.';
             $run->update(['status' => 'failed', 'error' => $message, 'finished_at' => now()]);
             $service->update(['last_error' => $message]);
+
             return;
         }
 
@@ -76,6 +79,7 @@ class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
             ]);
         });
         $failures = [];
+        $partialCompanies = 0;
 
         foreach ($companyRuns as $companyRun) {
             $companyTotals = ['received' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0];
@@ -92,25 +96,52 @@ class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
                         &$companyTotals,
                         &$resourceResults,
                     ): void {
-                        if ($state === 'completed' && $stored !== null) {
+                        if (in_array($state, ['completed', 'failed'], true) && $stored !== null) {
                             $resourceResults[$resource] = $stored;
                             foreach ($companyTotals as $field => $value) {
                                 $companyTotals[$field] += (int) ($stored[$field] ?? 0);
                             }
                         }
+                        $pageProgress = $state === 'progress' && $stored !== null
+                            ? [
+                                'current_page' => (int) ($stored['page'] ?? 0),
+                                'current_cursor' => isset($stored['cursor']) ? (int) $stored['cursor'] : null,
+                                'heartbeat_at' => $stored['heartbeat_at'] ?? now(),
+                            ]
+                            : ($state === 'failed' ? [
+                                'heartbeat_at' => now(),
+                            ] : [
+                                'current_page' => null,
+                                'current_cursor' => null,
+                                'heartbeat_at' => $state === 'running' ? now() : null,
+                            ]);
                         $companyRun->update([
-                            'current_resource' => $state === 'running' ? $resource : null,
+                            'current_resource' => in_array($state, ['running', 'progress'], true) ? $resource : null,
+                            ...$pageProgress,
                             ...$companyTotals,
                             'resource_results' => $resourceResults,
                         ]);
                     },
                     forceFullReconcile: $service->resource === 'webposto-full-reconciliation',
+                    continueOnResourceFailure: $service->resource === 'webposto-full-reconciliation',
                 );
+
+                $resourceFailures = collect($results)
+                    ->filter(fn (array $result): bool => ($result['status'] ?? null) === 'failed');
+                $companyError = $resourceFailures->isEmpty()
+                    ? null
+                    : $resourceFailures->map(fn (array $result, string $resource): string => $resource.': '.($result['error'] ?? 'Falha sem mensagem.')
+                    )->implode("\n");
+                if ($companyError !== null) {
+                    $partialCompanies++;
+                    $failures[] = $companyRun->empresa_nome.': '.$companyError;
+                }
 
                 $companyRun->update([
                     ...$companyTotals,
-                    'status' => 'success',
+                    'status' => $companyError === null ? 'success' : 'partial',
                     'current_resource' => null,
+                    'error' => $companyError,
                     'finished_at' => now(),
                 ]);
             } catch (Throwable $exception) {
@@ -129,7 +160,7 @@ class SyncWebPostoNewRecords implements ShouldQueue, ShouldBeUnique
 
         $status = $failures === []
             ? 'success'
-            : (count($failures) === $companyRuns->count() ? 'failed' : 'partial');
+            : ($partialCompanies > 0 ? 'partial' : (count($failures) === $companyRuns->count() ? 'failed' : 'partial'));
         $error = $failures === [] ? null : implode("\n", $failures);
         $run->update(['status' => $status, 'error' => $error, 'finished_at' => now()]);
         $service->update([

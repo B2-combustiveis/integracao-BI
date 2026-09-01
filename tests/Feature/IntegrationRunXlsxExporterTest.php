@@ -69,21 +69,18 @@ class IntegrationRunXlsxExporterTest extends TestCase
             $workbook = $zip->getFromName('xl/workbook.xml');
             $summary = $zip->getFromName('xl/worksheets/sheet1.xml');
             $sheet = $zip->getFromName('xl/worksheets/sheet2.xml');
-            $tankSheet = $zip->getFromName('xl/worksheets/sheet3.xml');
             $zip->close();
             $this->assertStringContainsString('Resumo', $workbook);
             $this->assertStringContainsString('fornecedores', $workbook);
             $this->assertStringNotContainsString('sem_novos', $workbook);
             $this->assertStringNotContainsString('administradoras', $workbook);
-            $this->assertStringContainsString('tanques', $workbook);
+            $this->assertStringNotContainsString('tanques', $workbook);
             $this->assertStringNotContainsString('recebidos', $summary);
             $this->assertStringNotContainsString('atualizados', $summary);
             $this->assertStringContainsString('fornecedorCodigo', $sheet);
             $this->assertStringContainsString('Fornecedor Teste', $sheet);
             $this->assertStringNotContainsString('_acao', $sheet);
             $this->assertStringNotContainsString('Registro Atualizado', $sheet);
-            $this->assertStringContainsString('tanqueCodigo', $tankSheet);
-            $this->assertStringContainsString('Tanque atualizado', $tankSheet);
         } finally {
             if ($path !== null) @unlink($path);
             $service->delete();
@@ -116,9 +113,9 @@ class IntegrationRunXlsxExporterTest extends TestCase
             'action' => 'updated',
             'natural_key' => ['empresaCodigo' => 4604, 'tanqueCodigo' => 3],
             'natural_key_hash' => hash('sha256', 'xlsx-reconciliation-updated'),
-            'payload' => ['tanqueCodigo' => 3, 'estoqueEscritural' => 5445.564],
-            'before_payload' => ['tanqueCodigo' => 3, 'estoqueEscritural' => 5454.495],
-            'after_payload' => ['tanqueCodigo' => 3, 'estoqueEscritural' => 5445.564],
+            'payload' => ['tanqueCodigo' => 3, 'nome' => 'Tanque Diesel', 'produtoCodigo' => 1103671, 'estoqueEscritural' => 5445.564],
+            'before_payload' => ['tanqueCodigo' => 3, 'nome' => 'Tanque Diesel', 'produtoCodigo' => 1103671, 'estoqueEscritural' => 5454.495],
+            'after_payload' => ['tanqueCodigo' => 3, 'nome' => 'Tanque Diesel', 'produtoCodigo' => 1103671, 'estoqueEscritural' => 5445.564],
             'changed_fields' => ['estoqueEscritural'],
             'detected_at' => now(),
         ]);
@@ -145,6 +142,11 @@ class IntegrationRunXlsxExporterTest extends TestCase
             $this->assertStringContainsString('atualizados', $summary);
             $this->assertStringNotContainsString('novos', $summary);
             $this->assertStringContainsString('_camposAlterados', $sheet);
+            $this->assertStringContainsString('_tanqueNome', $sheet);
+            $this->assertStringContainsString('_produtoCodigo', $sheet);
+            $this->assertStringContainsString('_produtoNome', $sheet);
+            $this->assertStringContainsString('Tanque Diesel', $sheet);
+            $this->assertStringContainsString('1103671', $sheet);
             $this->assertStringContainsString('estoqueEscritural_anterior', $sheet);
             $this->assertStringContainsString('estoqueEscritural_novo', $sheet);
             $this->assertStringContainsString('5454.495', $sheet);

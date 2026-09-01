@@ -34,8 +34,11 @@ class RawNaturalKeyResolver
     public function criteria(string $table, array $mapped): array
     {
         $fields = self::KEYS[$table] ?? [];
-        if (array_key_exists('empresaCodigo', $mapped) && $mapped['empresaCodigo'] !== null) {
-            array_unshift($fields, 'empresaCodigo');
+        foreach (['empresaCodigo', 'credencialEmpresaCodigo'] as $companyField) {
+            if (array_key_exists($companyField, $mapped) && $mapped[$companyField] !== null) {
+                array_unshift($fields, $companyField);
+                break;
+            }
         }
         if ($fields === []) {
             return array_filter($mapped, fn (mixed $value): bool => $value !== null);

@@ -3,9 +3,11 @@
 namespace Tests\Feature;
 
 use App\Http\Middleware\EnsureAdminSession;
+use App\Jobs\ReloadValidatedWebPostoTable;
 use App\Jobs\SyncWebPostoCompanyInitialLoad;
 use App\Models\WebPostoCredential;
 use App\Models\WebPostoInitialSyncRun;
+use App\Models\WebPostoReloadRun;
 use App\Services\WebPosto\WebPostoInitialLoadRunner;
 use Illuminate\Bus\UniqueLock;
 use Illuminate\Database\Schema\Blueprint;
@@ -110,6 +112,10 @@ class WebPostoInitialCompanySyncTest extends TestCase
         (new SyncWebPostoCompanyInitialLoad($run->id))->handle($runner);
 
         $this->assertSame(SyncWebPostoCompanyInitialLoad::RESOURCES, $called);
+        $resources = SyncWebPostoCompanyInitialLoad::RESOURCES;
+        $this->assertLessThan(array_search('caixas', $resources, true), array_search('pdvs', $resources, true));
+        $this->assertLessThan(array_search('vendas', $resources, true), array_search('formas_pagamento', $resources, true));
+        $this->assertLessThan(array_search('vendas', $resources, true), array_search('caixas', $resources, true));
         $this->assertSame('success', $run->fresh()->status);
         $this->assertSame(
             WebPostoCredential::STATUS_SINCRONIZADO,
@@ -141,5 +147,69 @@ class WebPostoInitialCompanySyncTest extends TestCase
         $credential = WebPostoCredential::query()->where('empresa_codigo', 9999)->sole();
         $this->assertSame(WebPostoCredential::STATUS_AGUARDANDO_SINCRONIZACAO, $credential->implantacao_status);
         $this->assertSame('API indisponível', $credential->carga_inicial_erro);
+    }
+
+    public function test_unsynchronized_company_cannot_queue_a_manual_reload(): void
+    {
+        Queue::fake();
+
+        $this->withoutMiddleware()
+            ->post('/admin/tables/fornecedores/reload', ['empresa_codigo' => 9999])
+            ->assertUnprocessable();
+
+        $this->assertFalse(WebPostoReloadRun::query()
+            ->where('empresa_codigo', 9999)
+            ->exists());
+    }
+
+    public function test_initial_load_runner_bypasses_the_synchronized_guard_but_manual_reload_still_enforces_it(): void
+    {
+        $fromInitialLoad = WebPostoReloadRun::query()->create([
+            'empresa_codigo' => 9999,
+            'resource' => 'recurso_inexistente',
+            'status' => 'queued',
+            'processed_tables' => [],
+        ]);
+
+        try {
+            (new ReloadValidatedWebPostoTable($fromInitialLoad->id))->handle(duringInitialLoad: true);
+            $this->fail('Deveria ter lancado excecao de tabela nao habilitada.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Tabela nao habilitada.', $exception->getMessage());
+        }
+
+        $manual = WebPostoReloadRun::query()->create([
+            'empresa_codigo' => 9999,
+            'resource' => 'recurso_inexistente',
+            'status' => 'queued',
+            'processed_tables' => [],
+        ]);
+
+        try {
+            (new ReloadValidatedWebPostoTable($manual->id))->handle();
+            $this->fail('Deveria ter lancado excecao de empresa nao sincronizada.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('A empresa precisa estar sincronizada antes de executar recargas.', $exception->getMessage());
+        }
+    }
+
+    public function test_initial_load_waits_until_company_reload_finishes(): void
+    {
+        Queue::fake();
+        WebPostoReloadRun::query()->create([
+            'empresa_codigo' => 9999,
+            'resource' => 'fornecedores',
+            'status' => 'running',
+            'processed_tables' => [],
+        ]);
+
+        $this->withoutMiddleware()
+            ->post('/admin/credentials/9999/synchronize')
+            ->assertRedirect();
+
+        $this->assertFalse(WebPostoInitialSyncRun::query()
+            ->where('empresa_codigo', 9999)
+            ->exists());
+        Queue::assertNothingPushed();
     }
 }

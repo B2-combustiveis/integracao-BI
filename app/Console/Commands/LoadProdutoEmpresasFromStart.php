@@ -36,7 +36,7 @@ class LoadProdutoEmpresasFromStart extends Command
                 }
                 return $stored;
             },
-            query: ['limite' => 1000],
+            query: ['limite' => 1000, 'empresaCodigo' => $empresa],
             cursor: ['initial_value' => 1, 'prefer_initial_value' => true],
             initialQuery: null,
             controlKey: '/INTEGRACAO/PRODUTO_EMPRESA:manual-initial',

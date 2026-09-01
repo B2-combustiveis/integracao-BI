@@ -33,10 +33,17 @@ class WebPostoClient
 
         unset($query['chave']);
 
+        $timeout = max(1, (int) config('integration.webposto.timeout', 30));
+        $connectTimeout = max(1, (int) config('integration.webposto.connect_timeout', 5));
         $response = Http::acceptJson()
-            ->connectTimeout((int) config('integration.webposto.connect_timeout', 5))
-            ->timeout((int) config('integration.webposto.timeout', 30))
-            ->retry(config('integration.webposto.retry_delays_ms', [250, 750, 1500]), throw: false)
+            ->connectTimeout($connectTimeout)
+            ->timeout($timeout)
+            ->withOptions(['curl' => [
+                CURLOPT_CONNECTTIMEOUT_MS => $connectTimeout * 1000,
+                CURLOPT_TIMEOUT_MS => $timeout * 1000,
+                CURLOPT_LOW_SPEED_LIMIT => 1,
+                CURLOPT_LOW_SPEED_TIME => $timeout,
+            ]])
             ->get($baseUrl.'/'.ltrim($endpoint, '/'), [
                 'chave' => $token,
                 ...$query,

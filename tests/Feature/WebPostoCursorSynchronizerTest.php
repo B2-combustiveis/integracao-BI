@@ -187,6 +187,109 @@ class WebPostoCursorSynchronizerTest extends TestCase
         $this->assertSame('error', $control->status);
     }
 
+    public function test_direct_list_resource_is_persisted_as_one_page_without_cursor(): void
+    {
+        $queries = [];
+        $this->mock(WebPostoClient::class, function (MockInterface $mock) use (&$queries): void {
+            $mock->shouldReceive('get')->once()->andReturnUsing(
+                function (string $endpoint, int $empresa, array $query) use (&$queries): array {
+                    $queries[] = $query;
+
+                    return $this->httpResult([
+                        ['subGrupoCodigo' => 4, 'grupoCodigo' => 15451, 'descricao' => 'DIVERSOS'],
+                        ['subGrupoCodigo' => 5, 'grupoCodigo' => 15449, 'descricao' => 'AR'],
+                    ]);
+                },
+            );
+        });
+
+        $persisted = [];
+        $totals = app(WebPostoCursorSynchronizer::class)->synchronize(
+            endpoint: '/INTEGRACAO/CONSULTAR_SUB_GRUPO_REDE',
+            empresaCodigo: 4604,
+            persist: function (mixed $payload) use (&$persisted): array {
+                $persisted = $payload['resultados'];
+
+                return ['unchanged' => 2];
+            },
+            query: [],
+            cursor: ['single_page' => true, 'direct_list' => true],
+        );
+
+        $this->assertSame([], $queries[0]);
+        $this->assertCount(2, $persisted);
+        $this->assertSame(1, $totals['pages']);
+        $this->assertSame(2, $totals['received']);
+        $this->assertSame(2, $totals['unchanged']);
+    }
+
+    public function test_direct_list_resource_fails_for_an_unexpected_payload(): void
+    {
+        $this->mock(WebPostoClient::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('get')->once()->andReturn(
+                $this->httpResult(['mensagem' => 'formato alterado']),
+            );
+        });
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Formato de lista direta inesperado');
+
+        app(WebPostoCursorSynchronizer::class)->synchronize(
+            endpoint: '/INTEGRACAO/CONSULTAR_SUB_GRUPO_REDE',
+            empresaCodigo: 4604,
+            persist: fn (): array => [],
+            cursor: ['single_page' => true, 'direct_list' => true],
+        );
+    }
+
+    public function test_full_reconciliation_resumes_from_last_confirmed_checkpoint(): void
+    {
+        WebPostoSyncControl::query()->create([
+            'empresa_codigo' => 4604,
+            'endpoint' => '/INTEGRACAO/TITULO_PAGAR:full-reconcile',
+            'strategy' => 'A',
+            'last_code' => 50,
+            'status' => 'error',
+            'metadata' => [
+                'cursor_type' => 'ultimo_codigo',
+                'cursor_value' => 50,
+                'checkpoint_cursor' => 50,
+                'checkpoint_page' => 3,
+                'resume_available' => true,
+            ],
+        ]);
+        $queries = [];
+        $this->mock(WebPostoClient::class, function (MockInterface $mock) use (&$queries): void {
+            $mock->shouldReceive('get')->once()->andReturnUsing(
+                function (string $endpoint, int $empresa, array $query) use (&$queries): array {
+                    $queries[] = $query;
+
+                    return $this->httpResult(['ultimoCodigo' => 50, 'resultados' => []]);
+                },
+            );
+        });
+        $progress = [];
+
+        app(WebPostoCursorSynchronizer::class)->synchronize(
+            endpoint: '/INTEGRACAO/TITULO_PAGAR',
+            empresaCodigo: 4604,
+            persist: fn (): array => [],
+            query: ['limite' => 1000],
+            cursor: ['initial_value' => 1, 'prefer_initial_value' => true],
+            controlKey: '/INTEGRACAO/TITULO_PAGAR:full-reconcile',
+            resumeFromCheckpoint: true,
+            onPageProgress: function (array $state) use (&$progress): void {
+                $progress[] = $state;
+            },
+        );
+
+        $control = WebPostoSyncControl::query()->firstOrFail();
+        $this->assertSame(50, $queries[0]['ultimoCodigo']);
+        $this->assertSame(4, $progress[0]['page']);
+        $this->assertSame('ok', $control->status);
+        $this->assertFalse($control->metadata['resume_available']);
+    }
+
     /** @param array<string, mixed> $payload */
     private function httpResult(array $payload): array
     {

@@ -27,7 +27,7 @@ class LoadCompraItensFromStart extends Command
             endpoint: '/INTEGRACAO/COMPRA_ITEM',
             empresaCodigo: $empresa,
             persist: fn ($payload, $parameters) => $importer->import($payload, $empresa, $parameters),
-            query: ['dataInicial' => '2000-01-01', 'dataFinal' => now()->toDateString(), 'limite' => 1000],
+            query: ['dataInicial' => '2000-01-01', 'dataFinal' => now()->toDateString(), 'limite' => 1000, 'empresaCodigo' => $empresa],
             cursor: ['initial_value' => 1, 'prefer_initial_value' => ! $resume],
             initialQuery: null,
             maxPages: max(1, (int) $this->option('pages')),

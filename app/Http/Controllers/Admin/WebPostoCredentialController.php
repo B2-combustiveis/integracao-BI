@@ -1,10 +1,12 @@
 <?php
+
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\SyncWebPostoCompanyInitialLoad;
 use App\Models\WebPostoCredential;
 use App\Models\WebPostoInitialSyncRun;
+use App\Models\WebPostoReloadRun;
 use App\Services\WebPosto\WebPostoCredentialRegistrationService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -25,7 +27,11 @@ class WebPostoCredentialController extends Controller
             return back()->withInput($request->except('token'))->withErrors(['token' => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Posto identificado e credencial salva.');
+        $count = count($result['companies']);
+
+        return back()->with('status', $count === 1
+            ? 'Posto identificado e credencial salva.'
+            : $count.' postos identificados e credencial salva.');
     }
 
     public function synchronize(int $empresa): RedirectResponse
@@ -44,6 +50,16 @@ class WebPostoCredentialController extends Controller
             ->exists();
         if ($running) {
             return back()->with('status', 'A carga inicial desta empresa já está em andamento.');
+        }
+
+        $reloadRunning = WebPostoReloadRun::query()
+            ->where('empresa_codigo', $empresa)
+            ->whereIn('status', ['queued', 'running'])
+            ->exists();
+        if ($reloadRunning) {
+            return back()->withErrors([
+                'sync' => 'Existe uma recarga de dados em andamento para esta empresa. Aguarde a conclusão.',
+            ]);
         }
 
         $run = WebPostoInitialSyncRun::query()->create([

@@ -17,7 +17,7 @@ class WebPostoClienteEmpresasTest extends TestCase
         $resolver->shouldReceive('resolve')->once()->with(4604)->andReturn(new WebPostoCredentialData(1, 'https://webposto.test', 'token'));
         $resolver->shouldReceive('markAsUsed')->once()->with(1);
         $importer = $this->mock(ClienteEmpresaImporter::class);
-        $importer->shouldReceive('import')->once()->andReturn(['table' => 'cliente_empresas']);
+        $importer->shouldReceive('import')->once()->with(\Mockery::type('array'), 4604)->andReturn(['table' => 'cliente_empresas']);
         Http::fake(['*' => Http::response(['ultimoCodigo' => 1, 'resultados' => [[
             'empresaCodigo' => 4604, 'clienteCodigo' => 481112, 'ativoInativo' => true, 'usaPrazo' => true, 'codigo' => 1,
         ]]])]);

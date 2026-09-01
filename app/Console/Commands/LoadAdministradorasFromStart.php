@@ -28,7 +28,7 @@ class LoadAdministradorasFromStart extends Command
             endpoint: '/INTEGRACAO/ADMINISTRADORA',
             empresaCodigo: $empresa,
             persist: fn ($payload, $parameters) => $importer->import($payload, $empresa, $parameters),
-            query: ['limite' => 1000],
+            query: ['limite' => 1000, 'empresaCodigo' => $empresa],
             cursor: ['initial_value' => 1, 'prefer_initial_value' => ! $resume],
             initialQuery: null,
             maxPages: max(1, (int) $this->option('pages')),

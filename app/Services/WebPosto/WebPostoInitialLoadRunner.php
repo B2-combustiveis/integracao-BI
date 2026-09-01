@@ -17,7 +17,7 @@ class WebPostoInitialLoadRunner
             'status' => 'queued',
             'processed_tables' => [],
         ]);
-        (new ReloadValidatedWebPostoTable($reload->id))->handle();
+        (new ReloadValidatedWebPostoTable($reload->id))->handle(duringInitialLoad: true);
         $reload->refresh();
         if ($reload->status !== 'success') {
             throw new RuntimeException($reload->error ?: 'Falha na carga de '.$resource.'.');

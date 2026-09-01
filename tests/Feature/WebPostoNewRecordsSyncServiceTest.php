@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\SyncWebPostoNewRecords;
 use App\Models\IntegrationService;
 use App\Models\IntegrationServiceRun;
+use App\Models\WebPostoSyncControl;
 use App\Services\Integration\IntegrationRunChangeRecorder;
 use App\Services\WebPosto\WebPostoClient;
 use App\Services\WebPosto\WebPostoCursorSynchronizer;
@@ -231,6 +232,76 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
         ], 'webposto');
         $this->assertSame('updated', $run->fresh()->changes()->sole()->action);
     }
+
+    public function test_successful_snapshot_normalizes_a_legacy_cursor_error(): void
+    {
+        $service = IntegrationService::query()->create([
+            'name' => 'Snapshot legacy control test',
+            'slug' => 'snapshot-legacy-control-'.str()->uuid(),
+            'category' => 'cadastros',
+            'resource' => 'webposto-new-records',
+            'empresa_codigo' => 4604,
+            'settings' => ['resources' => ['bombas']],
+        ]);
+        $this->serviceIds[] = $service->id;
+        $run = IntegrationServiceRun::query()->create([
+            'integration_service_id' => $service->id,
+            'status' => 'running',
+            'started_at' => now(),
+        ]);
+        $control = WebPostoSyncControl::query()->create([
+            'empresa_codigo' => 4604,
+            'endpoint' => '/INTEGRACAO/BOMBA:new-records',
+            'strategy' => 'B',
+            'last_code' => 6857,
+            'status' => 'error',
+            'consecutive_failures' => 3,
+            'last_error' => 'Cursor ultimoCodigo ausente ou sem avanco em /INTEGRACAO/BOMBA.',
+            'metadata' => ['cursor_type' => 'ultimo_codigo', 'cursor_value' => 6857],
+        ]);
+        $definition = [
+            'endpoint' => '/INTEGRACAO/BOMBA',
+            'table' => 'strict_new_records',
+            'key' => 'registroCodigo',
+            'natural_keys' => ['registroCodigo'],
+            'mode' => 'snapshot_new',
+            'query' => [],
+            'importer' => StrictNewRecordImporter::class,
+            'updated_field' => 'dataHoraAtualizacao',
+        ];
+        $catalog = Mockery::mock(WebPostoNewRecordsResourceCatalog::class);
+        $catalog->shouldReceive('get')->once()->with('bombas')->andReturn($definition);
+        $client = Mockery::mock(WebPostoClient::class);
+        $response = Mockery::mock();
+        $response->shouldReceive('successful')->once()->andReturnTrue();
+        $client->shouldReceive('get')->once()->andReturn([
+            'response' => $response,
+            'duration_ms' => 1,
+            'payload' => ['resultados' => [[
+                'empresaCodigo' => 4604,
+                'registroCodigo' => 10,
+                'nome' => 'Bomba 1',
+            ]]],
+        ]);
+        $subject = new WebPostoNewRecordsSyncService(
+            $catalog,
+            Mockery::mock(WebPostoCursorSynchronizer::class),
+            app(IntegrationRunChangeRecorder::class),
+            $client,
+            app(WebPostoPendingRecordService::class),
+        );
+
+        $result = $subject->synchronize(4604, ['bombas'], $run->id);
+
+        $this->assertSame(1, $result['bombas']['inserted']);
+        $control->refresh();
+        $this->assertSame('ok', $control->status);
+        $this->assertSame(0, $control->consecutive_failures);
+        $this->assertNull($control->last_error);
+        $this->assertTrue($control->metadata['snapshot_new']);
+        $this->assertTrue($control->metadata['legacy_cursor_retired']);
+    }
+
     public function test_it_retries_a_pending_record_and_logs_it_when_the_dependency_is_available(): void
     {
         $service = IntegrationService::query()->create([

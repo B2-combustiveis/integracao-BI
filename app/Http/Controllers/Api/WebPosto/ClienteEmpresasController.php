@@ -30,7 +30,7 @@ class ClienteEmpresasController extends Controller
         }
         $response = $result['response'];
         $payload = $result['payload'];
-        $storage = $response->successful() ? $importer->import($payload) : null;
+        $storage = $response->successful() ? $importer->import($payload, $empresaCodigo) : null;
         return response()->json([
             'status' => $response->successful(), 'service' => 'webposto', 'endpoint' => self::ENDPOINT,
             'empresa_codigo' => $empresaCodigo,

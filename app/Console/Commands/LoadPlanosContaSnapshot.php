@@ -39,7 +39,7 @@ class LoadPlanosContaSnapshot extends Command
                 }
                 return $importer->import($payload, $empresa, $table, $keyField);
             },
-            query: ['limite' => 1000],
+            query: ['limite' => 1000, 'empresaCodigo' => $empresa],
             cursor: ['initial_value' => 1, 'prefer_initial_value' => ! $resume],
             maxPages: max(1, (int) $this->option('pages')),
             controlKey: $controlKey,

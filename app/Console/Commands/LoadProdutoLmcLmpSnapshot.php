@@ -27,7 +27,7 @@ class LoadProdutoLmcLmpSnapshot extends Command
         $control->update(['status' => 'running', 'last_started_at' => now(), 'last_error' => null]);
 
         try {
-            $result = $client->get($endpoint, $empresa);
+            $result = $client->get($endpoint, $empresa, ['empresaCodigo' => $empresa]);
             if (! $result['response']->successful()) {
                 throw new RuntimeException('WebPosto respondeu HTTP '.$result['response']->status().' em '.$endpoint.'.');
             }

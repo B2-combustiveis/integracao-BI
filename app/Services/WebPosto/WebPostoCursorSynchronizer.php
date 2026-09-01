@@ -19,7 +19,7 @@ class WebPostoCursorSynchronizer
     /**
      * @param callable(mixed, array<string, mixed>): array<string, mixed> $persist
      * @param array<string, mixed> $query
-     * @param array{type?: string, request_field?: string, response_field?: string, initial_value?: int, prefer_initial_value?: bool, single_page?: bool} $cursor
+     * @param array{type?: string, request_field?: string, response_field?: string, initial_value?: int, prefer_initial_value?: bool, single_page?: bool, direct_list?: bool} $cursor
      * @param array<string, mixed>|null $initialQuery
      * @return array<string, int>
      */
@@ -34,6 +34,8 @@ class WebPostoCursorSynchronizer
         ?int $integrationServiceRunId = null,
         ?string $controlKey = null,
         bool $omitCursorWhenZero = false,
+        bool $resumeFromCheckpoint = false,
+        ?callable $onPageProgress = null,
     ): array {
         $type = (string) ($cursor['type'] ?? 'ultimo_codigo');
         $requestField = (string) ($cursor['request_field'] ?? 'ultimoCodigo');
@@ -41,6 +43,7 @@ class WebPostoCursorSynchronizer
         $initialValue = (int) ($cursor['initial_value'] ?? 0);
         $preferInitialValue = (bool) ($cursor['prefer_initial_value'] ?? false);
         $singlePage = (bool) ($cursor['single_page'] ?? false);
+        $directList = (bool) ($cursor['direct_list'] ?? false);
         $control = WebPostoSyncControl::query()->firstOrCreate(
             ['empresa_codigo' => $empresaCodigo, 'endpoint' => $controlKey ?? $endpoint],
             [
@@ -50,11 +53,16 @@ class WebPostoCursorSynchronizer
             ],
         );
         $metadata = is_array($control->metadata) ? $control->metadata : [];
-        $current = $preferInitialValue
+        $canResume = $resumeFromCheckpoint
+            && ! $control->wasRecentlyCreated
+            && $control->status === 'error'
+            && (int) $control->last_code > $initialValue;
+        $pageOffset = $canResume ? (int) ($metadata['checkpoint_page'] ?? 0) : 0;
+        $current = $canResume ? (int) $control->last_code : ($preferInitialValue
             ? $initialValue
             : (is_numeric($metadata['cursor_value'] ?? null)
                 ? (int) $metadata['cursor_value']
-                : (int) $control->last_code);
+                : (int) $control->last_code));
         $initialLoad = $control->wasRecentlyCreated;
         $totals = [
             'pages' => 0,
@@ -71,7 +79,13 @@ class WebPostoCursorSynchronizer
             'last_code' => $current,
             'last_started_at' => now(),
             'last_error' => null,
-            'metadata' => [...$metadata, 'cursor_type' => $type, 'cursor_value' => $current],
+            'metadata' => [...$metadata,
+                'cursor_type' => $type,
+                'cursor_value' => $current,
+                'resumed' => $canResume,
+                'resume_available' => $canResume,
+                'heartbeat_at' => now()->toIso8601String(),
+            ],
         ]);
         $run = WebPostoSyncEndpointRun::query()->create([
             'webposto_sync_control_id' => $control->id,
@@ -83,10 +97,25 @@ class WebPostoCursorSynchronizer
 
         try {
             for ($page = 0; $page < $maxPages; $page++) {
-                $requestQuery = $page === 0 && $initialQuery !== null
+                $visiblePage = $pageOffset + $page + 1;
+                $heartbeat = now();
+                $metadata = [...$metadata,
+                    'cursor_type' => $type,
+                    'cursor_value' => $current,
+                    'requesting_page' => $visiblePage,
+                    'heartbeat_at' => $heartbeat->toIso8601String(),
+                    'resume_available' => $totals['pages'] > 0 || $canResume,
+                ];
+                $control->update(['last_code' => $current, 'metadata' => $metadata]);
+                if ($onPageProgress !== null) {
+                    $onPageProgress(['state' => 'requesting', 'page' => $visiblePage, 'cursor' => $current, 'heartbeat_at' => $heartbeat]);
+                }
+                $requestQuery = $directList
+                    ? $query
+                    : ($page === 0 && $initialQuery !== null
                     && ($initialLoad || ($omitCursorWhenZero && $current === 0))
                     ? [...$query, ...$initialQuery]
-                    : [...$query, $requestField => $current];
+                    : [...$query, $requestField => $current]);
                 $result = $this->client->get($endpoint, $empresaCodigo, $requestQuery);
                 $totals['duration_ms'] += (int) $result['duration_ms'];
 
@@ -95,24 +124,30 @@ class WebPostoCursorSynchronizer
                 }
 
                 $payload = $result['payload'];
-                $rows = is_array($payload) && is_array($payload['resultados'] ?? null)
-                    ? $payload['resultados']
-                    : [];
+                if ($directList && (! is_array($payload) || ! array_is_list($payload))) {
+                    throw new RuntimeException('Formato de lista direta inesperado em '.$endpoint.'.');
+                }
+                $rows = $directList
+                    ? $payload
+                    : (is_array($payload) && is_array($payload['resultados'] ?? null)
+                        ? $payload['resultados']
+                        : []);
                 if ($rows === []) {
                     $this->finish($control, $run, $totals);
 
                     return $totals;
                 }
 
-                $next = is_array($payload) && is_numeric($payload[$responseField] ?? null)
+                $next = is_array($payload) && ! $directList && is_numeric($payload[$responseField] ?? null)
                     ? (int) $payload[$responseField]
                     : null;
-                if ($next === null || $next <= $current) {
+                if (! $directList && ($next === null || $next <= $current)) {
                     throw new RuntimeException("Cursor {$responseField} ausente ou sem avanco em {$endpoint}.");
                 }
 
+                $persistPayload = $directList ? ['resultados' => $rows] : $payload;
                 $stored = DB::connection('webposto')->transaction(
-                    fn (): array => $persist($payload, $requestQuery),
+                    fn (): array => $persist($persistPayload, $requestQuery),
                 );
                 $totals['pages']++;
                 $totals['received'] += count($rows);
@@ -120,9 +155,27 @@ class WebPostoCursorSynchronizer
                     $totals[$field] += (int) ($stored[$field] ?? 0);
                 }
 
+                if ($directList) {
+                    $this->finish($control, $run, $totals);
+
+                    return $totals;
+                }
+
                 $current = $next;
-                $metadata = [...$metadata, 'cursor_type' => $type, 'cursor_value' => $current];
+                $heartbeat = now();
+                $metadata = [...$metadata,
+                    'cursor_type' => $type,
+                    'cursor_value' => $current,
+                    'checkpoint_cursor' => $current,
+                    'checkpoint_page' => $visiblePage,
+                    'heartbeat_at' => $heartbeat->toIso8601String(),
+                    'resume_available' => true,
+                ];
                 $control->update(['last_code' => $current, 'metadata' => $metadata]);
+                $run->update([...$totals]);
+                if ($onPageProgress !== null) {
+                    $onPageProgress(['state' => 'persisted', 'page' => $visiblePage, 'cursor' => $current, 'heartbeat_at' => $heartbeat, ...$totals]);
+                }
                 if ($singlePage) {
                     $this->finish($control, $run, $totals);
                     return $totals;
@@ -137,6 +190,10 @@ class WebPostoCursorSynchronizer
                 'last_completed_at' => now(),
                 'consecutive_failures' => $control->consecutive_failures + 1,
                 'last_error' => $message,
+                'metadata' => [...$metadata,
+                    'resume_available' => $resumeFromCheckpoint && (int) $control->last_code > $initialValue,
+                    'heartbeat_at' => now()->toIso8601String(),
+                ],
             ]);
             $run->update([...$totals, 'status' => 'failed', 'error' => $message, 'finished_at' => now()]);
 
@@ -155,6 +212,11 @@ class WebPostoCursorSynchronizer
             'last_completed_at' => now(),
             'consecutive_failures' => 0,
             'last_error' => null,
+            'metadata' => [
+                ...(is_array($control->metadata) ? $control->metadata : []),
+                'resume_available' => false,
+                'heartbeat_at' => now()->toIso8601String(),
+            ],
         ]);
         $run->update([...$totals, 'status' => 'success', 'finished_at' => now()]);
     }

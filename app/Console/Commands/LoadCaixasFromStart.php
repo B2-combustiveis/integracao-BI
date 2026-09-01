@@ -32,7 +32,7 @@ class LoadCaixasFromStart extends Command
                 }
                 return $importer->import($payload, $empresa, $parameters);
             },
-            query: ['dataInicial' => '2000-01-01', 'dataFinal' => now()->toDateString(), 'limite' => 1000],
+            query: ['dataInicial' => '2000-01-01', 'dataFinal' => now()->toDateString(), 'limite' => 1000, 'empresaCodigo' => $empresa],
             cursor: ['initial_value' => 1, 'prefer_initial_value' => ! $resume],
             maxPages: max(1, (int) $this->option('pages')),
             controlKey: $key,

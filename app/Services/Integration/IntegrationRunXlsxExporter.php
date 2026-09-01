@@ -37,8 +37,7 @@ class IntegrationRunXlsxExporter
         $changesByResource = $run->changes
             ->filter(fn ($change): bool => $isReconciliation
                 ? $change->action === 'updated'
-                : ($change->action === 'inserted'
-                    || ($change->resource === 'tanques' && $change->action === 'updated')))
+                : $change->action === 'inserted')
             ->groupBy('resource');
         foreach ($changesByResource->keys() as $resource) {
             $changes = $changesByResource->get($resource, collect());
@@ -79,7 +78,10 @@ class IntegrationRunXlsxExporter
             return $fields;
         }, []);
         $names = $this->comparisonNames($resource, $changes);
-        $headers = ['_empresaCodigo', '_nome', '_acao', '_camposAlterados', '_detectadoEm'];
+        $tankProducts = $resource === 'tanques' ? $this->tankProducts($changes) : [];
+        $headers = $resource === 'tanques'
+            ? ['_empresaCodigo', '_tanqueNome', '_produtoCodigo', '_produtoNome', '_acao', '_camposAlterados', '_detectadoEm']
+            : ['_empresaCodigo', '_nome', '_acao', '_camposAlterados', '_detectadoEm'];
         foreach ($fields as $field) {
             $headers[] = $field.'_anterior';
             $headers[] = $field.'_novo';
@@ -92,10 +94,15 @@ class IntegrationRunXlsxExporter
             $values = [
                 $change->natural_key['empresaCodigo'] ?? null,
                 $names[$this->changeKey($change)] ?? null,
-                'atualizado',
-                implode(', ', $changedFields),
-                $change->detected_at?->format('Y-m-d H:i:s'),
             ];
+            if ($resource === 'tanques') {
+                $product = $tankProducts[$this->changeKey($change)] ?? [];
+                $values[] = $product['codigo'] ?? null;
+                $values[] = $product['nome'] ?? null;
+            }
+            $values[] = 'atualizado';
+            $values[] = implode(', ', $changedFields);
+            $values[] = $change->detected_at?->format('Y-m-d H:i:s');
             foreach ($fields as $field) {
                 $values[] = in_array($field, $changedFields, true) ? $this->cell($before[$field] ?? null) : null;
                 $values[] = in_array($field, $changedFields, true) ? $this->cell($after[$field] ?? null) : null;
@@ -106,6 +113,14 @@ class IntegrationRunXlsxExporter
 
     private function comparisonNames(string $resource, $changes): array
     {
+        if ($resource === 'tanques') {
+            return $changes->mapWithKeys(fn ($change): array => [
+                $this->changeKey($change) => $change->after_payload['nome']
+                    ?? $change->before_payload['nome']
+                    ?? $change->payload['nome']
+                    ?? null,
+            ])->all();
+        }
         if ($resource === 'produtos') {
             return $changes->mapWithKeys(fn ($change): array => [
                 $this->changeKey($change) => $change->after_payload['nome']
@@ -130,10 +145,41 @@ class IntegrationRunXlsxExporter
             ])->all();
     }
 
+    private function tankProducts($changes): array
+    {
+        $references = $changes->mapWithKeys(function ($change): array {
+            $productCode = $change->after_payload['produtoCodigo']
+                ?? $change->before_payload['produtoCodigo']
+                ?? $change->payload['produtoCodigo']
+                ?? null;
+
+            return [$this->changeKey($change) => [
+                'empresa' => $change->natural_key['empresaCodigo'] ?? null,
+                'codigo' => $productCode,
+            ]];
+        });
+        $companies = $references->pluck('empresa')->filter()->unique()->values();
+        $products = $references->pluck('codigo')->filter()->unique()->values();
+        $names = DB::connection('webposto')->table('produtos')
+            ->whereIn('empresaCodigo', $companies)
+            ->whereIn('produtoCodigo', $products)
+            ->get(['empresaCodigo', 'produtoCodigo', 'nome'])
+            ->mapWithKeys(fn (object $product): array => [
+                $product->empresaCodigo.':'.$product->produtoCodigo => $product->nome,
+            ]);
+
+        return $references->map(fn (array $reference): array => [
+            'codigo' => $reference['codigo'],
+            'nome' => $names->get($reference['empresa'].':'.$reference['codigo']),
+        ])->all();
+    }
+
     private function changeKey($change): string
     {
         return ($change->natural_key['empresaCodigo'] ?? '').':'
-            .($change->natural_key['produtoCodigo'] ?? '');
+            .($change->natural_key['produtoCodigo']
+                ?? $change->natural_key['tanqueCodigo']
+                ?? '');
     }
 
     private function sheetName(string $resource): string

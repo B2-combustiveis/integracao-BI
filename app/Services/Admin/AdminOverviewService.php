@@ -17,9 +17,9 @@ class AdminOverviewService
     ) {
     }
 
-    public function get(): array
+    public function get(?int $empresaCodigo = null): array
     {
-        $tables = $this->tables();
+        $tables = $this->tables($empresaCodigo);
         $connections = collect(['mysql' => 'Integração', 'webposto' => 'WebPosto', 'bi' => 'BI'])
             ->map(fn (string $label, string $connection): array => $this->connection($connection, $label))->values()->all();
 
@@ -35,6 +35,7 @@ class AdminOverviewService
             'credentials' => $this->credentials(),
             'tables' => $tables,
             'reloads' => $this->reloads(),
+            'selected_company' => $empresaCodigo,
         ];
     }
 
@@ -49,7 +50,7 @@ class AdminOverviewService
         }
     }
 
-    private function tables(): array
+    private function tables(?int $empresaCodigo = null): array
     {
         try {
             $database = DB::connection('webposto')->getDatabaseName();
@@ -63,12 +64,16 @@ class AdminOverviewService
             $rows = DB::connection('webposto')->table('information_schema.TABLES')
                 ->where('TABLE_SCHEMA', $database)->where('TABLE_TYPE', 'BASE TABLE')
                 ->orderBy('TABLE_NAME')->get(['TABLE_NAME', 'DATA_LENGTH', 'INDEX_LENGTH']);
-            return $rows->map(function (object $row) use ($newRecordsTables, $reconciliationTables): array {
+            return $rows->map(function (object $row) use ($newRecordsTables, $reconciliationTables, $empresaCodigo): array {
                 $table = $row->TABLE_NAME;
                 $columns = Schema::connection('webposto')->getColumnListing($table);
+                $query = DB::connection('webposto')->table($table);
+                if ($empresaCodigo !== null && in_array('empresaCodigo', $columns, true)) {
+                    $query->where('empresaCodigo', $empresaCodigo);
+                }
                 $updated = in_array('updated_at', $columns, true)
-                    ? DB::connection('webposto')->table($table)->max('updated_at') : null;
-                return ['name' => $table, 'records' => DB::connection('webposto')->table($table)->count(),
+                    ? (clone $query)->max('updated_at') : null;
+                return ['name' => $table, 'records' => (clone $query)->count(),
                     'columns' => count($columns), 'last_update' => $updated,
                     'size_bytes' => (int) $row->DATA_LENGTH + (int) $row->INDEX_LENGTH,
                     'new_records_sync' => in_array($table, $newRecordsTables, true),

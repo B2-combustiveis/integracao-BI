@@ -6,12 +6,13 @@ use Illuminate\Support\Facades\DB;
 
 class ClienteEmpresaImporter
 {
-    public function import(mixed $payload): array
+    public function import(mixed $payload, int $empresaCodigo): array
     {
         $resultados = is_array($payload) && is_array($payload['resultados'] ?? null) ? $payload['resultados'] : [];
         $validos = collect($resultados)->filter(fn (mixed $item): bool =>
             is_array($item) && isset($item['empresaCodigo'], $item['clienteCodigo'])
             && is_numeric($item['empresaCodigo']) && is_numeric($item['clienteCodigo'])
+            && (int) $item['empresaCodigo'] === $empresaCodigo
         )->unique(fn (array $item): string => (int) $item['empresaCodigo'].'-'.(int) $item['clienteCodigo'])->values();
 
         $connection = DB::connection('webposto');

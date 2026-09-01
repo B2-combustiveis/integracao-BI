@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Services\WebPosto;
 
 use App\Models\WebPostoCredential;
@@ -15,8 +16,7 @@ class WebPostoCredentialRegistrationService
     public function __construct(
         private readonly EmpresaImporter $empresaImporter,
         private readonly EmpresaBiSynchronizer $biSynchronizer,
-    ) {
-    }
+    ) {}
 
     /** @return array{companies: array<int, int>, storage: array<string, mixed>} */
     public function register(string $baseUrl, string $token): array
@@ -48,10 +48,6 @@ class WebPostoCredentialRegistrationService
             throw new RuntimeException('A credencial foi aceita, mas nenhuma empresa valida foi retornada.');
         }
 
-        if ($companies->count() !== 1) {
-            throw new RuntimeException('Cada token deve identificar exatamente um posto.');
-        }
-
         $raw = DB::connection('webposto')->transaction(function () use ($payload, $companies, $baseUrl, $token): array {
             $storage = $this->empresaImporter->import($payload);
             foreach ($companies as $company) {
@@ -60,6 +56,7 @@ class WebPostoCredentialRegistrationService
                     ['base_url' => $baseUrl, 'token' => $token, 'ativo' => true, 'ultimo_uso_em' => now()],
                 );
             }
+
             return $storage;
         });
 

@@ -36,9 +36,7 @@ class LoadProdutoSubgruposSnapshot extends Command
             $keys = collect(is_array($rows) ? $rows : [])->filter(fn ($row) => is_array($row)
                     && is_numeric($row['grupoCodigo'] ?? null) && is_numeric($row['subGrupoCodigo'] ?? null))
                 ->map(fn ($row) => (int) $row['grupoCodigo'].'|'.(int) $row['subGrupoCodigo'])->unique()->values();
-            if ($keys->isEmpty()) {
-                throw new RuntimeException('O WebPosto nao retornou subgrupos de produtos validos.');
-            }
+            // Lista vazia e uma resposta valida: nem toda rede/posto cadastra subgrupos de produto.
 
             $stored = DB::connection('webposto')->transaction(function () use ($importer, $result, $empresa, $keys): array {
                 $stored = $importer->import($result['payload'], $empresa);
@@ -60,7 +58,7 @@ class LoadProdutoSubgruposSnapshot extends Command
                 return $stored;
             });
 
-            $lastCode = collect($rows)->max(fn ($row) => (int) ($row['subGrupoCodigo'] ?? 0));
+            $lastCode = collect($rows)->max(fn ($row) => (int) ($row['subGrupoCodigo'] ?? 0)) ?? 0;
             $control->update(['status' => 'ok', 'last_code' => $lastCode, 'last_completed_at' => now(),
                 'consecutive_failures' => 0, 'last_error' => null,
                 'metadata' => ['mode' => 'snapshot', 'records' => $keys->count()]]);

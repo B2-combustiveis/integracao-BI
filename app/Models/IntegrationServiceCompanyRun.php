@@ -15,6 +15,7 @@ class IntegrationServiceCompanyRun extends Model
             'resource_results' => 'array',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
+            'heartbeat_at' => 'datetime',
         ];
     }
 
