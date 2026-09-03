@@ -8,7 +8,6 @@ use App\Models\IntegrationServiceRun;
 use App\Services\Integration\IntegrationServiceDispatcher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use App\Services\Integration\IntegrationRunXlsxExporter;
@@ -37,7 +36,7 @@ class IntegrationServiceController extends Controller
     public function status(): JsonResponse
     {
         $serviceQuery = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-full-reconciliation', 'webposto-database-changes']);
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation']);
         $serviceIds = (clone $serviceQuery)->pluck('id');
 
         $serviceModels = $serviceQuery
@@ -111,7 +110,7 @@ class IntegrationServiceController extends Controller
     public function clearCompleted(): RedirectResponse
     {
         $serviceIds = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-full-reconciliation', 'webposto-database-changes'])
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation'])
             ->pluck('id');
         $deleted = IntegrationServiceRun::query()
             ->whereIn('integration_service_id', $serviceIds)
@@ -143,19 +142,6 @@ class IntegrationServiceController extends Controller
             $filename,
             ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
         )->deleteFileAfterSend(true);
-    }
-
-    public function update(Request $request, IntegrationService $service): RedirectResponse
-    {
-        $validated = $request->validate([
-            'frequency_minutes' => ['required', 'integer', 'min:1', 'max:10080'],
-            'lookback_days' => ['required', 'integer', 'min:1', 'max:30'],
-        ]);
-        $service->update([
-            ...$validated,
-            'next_run_at' => $service->active ? now()->addMinutes((int) $validated['frequency_minutes']) : null,
-        ]);
-        return back()->with('status', 'Intervalo do servico atualizado.');
     }
 
     /** @return array<string, mixed> */

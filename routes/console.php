@@ -15,3 +15,6 @@ Schedule::call(fn () => app(IntegrationServiceDispatcher::class)->dispatchDue())
 
 Schedule::call(fn () => app(OrphanedIntegrationRunCleaner::class)->clean())
     ->name('clean-orphaned-integration-runs')->everyMinute()->withoutOverlapping();
+
+Schedule::call(fn () => app(OrphanedIntegrationRunCleaner::class)->cleanStaleCompanyRuns())
+    ->name('cancel-unresponsive-company-reconciliations')->everyMinute()->withoutOverlapping();

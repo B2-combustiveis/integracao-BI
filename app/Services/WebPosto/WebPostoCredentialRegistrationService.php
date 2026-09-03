@@ -19,7 +19,7 @@ class WebPostoCredentialRegistrationService
     ) {}
 
     /** @return array{companies: array<int, int>, storage: array<string, mixed>} */
-    public function register(string $baseUrl, string $token): array
+    public function register(string $baseUrl, string $token, string $base): array
     {
         $baseUrl = rtrim(trim($baseUrl), '/').'/';
         $token = trim($token);
@@ -48,12 +48,12 @@ class WebPostoCredentialRegistrationService
             throw new RuntimeException('A credencial foi aceita, mas nenhuma empresa valida foi retornada.');
         }
 
-        $raw = DB::connection('webposto')->transaction(function () use ($payload, $companies, $baseUrl, $token): array {
+        $raw = DB::connection('webposto')->transaction(function () use ($payload, $companies, $baseUrl, $token, $base): array {
             $storage = $this->empresaImporter->import($payload);
             foreach ($companies as $company) {
                 WebPostoCredential::query()->updateOrCreate(
                     ['empresa_codigo' => (int) $company['empresaCodigo']],
-                    ['base_url' => $baseUrl, 'token' => $token, 'ativo' => true, 'ultimo_uso_em' => now()],
+                    ['base_url' => $baseUrl, 'token' => $token, 'base' => $base, 'ativo' => true, 'ultimo_uso_em' => now()],
                 );
             }
 

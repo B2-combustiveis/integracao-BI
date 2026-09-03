@@ -58,6 +58,21 @@ class WebPostoZeroCodeExceptionsTest extends TestCase
         $this->assertSame(1, $result['skipped']);
     }
 
+    public function test_edi_card_with_zero_sale_is_accepted_but_a_regular_card_is_not(): void
+    {
+        DB::connection('webposto')->table('administradoras')->insert(['empresaCodigo' => 4604, 'administradoraCodigo' => 10]);
+        DB::connection('webposto')->table('centros_custo')->insert(['centroCustoCodigo' => 20]);
+        $raw = Mockery::mock(RawResourceImporter::class);
+        $raw->shouldReceive('import')->once()->withArgs(fn ($payload) => count($payload['resultados']) === 1
+            && $payload['resultados'][0]['tipoInclusao'] === 'EDI'
+            && $payload['resultados'][0]['vendaCodigo'] === null)->andReturn($this->stored(1));
+        $result = (new CartaoImporter($raw))->import(['resultados' => [
+            ['empresaCodigo' => 4604, 'cartaoCodigo' => 1, 'vendaCodigo' => 0, 'administradoraCodigo' => 10, 'centroCustoCodigo' => 20, 'tipoInclusao' => 'EDI'],
+            ['empresaCodigo' => 4604, 'cartaoCodigo' => 2, 'vendaCodigo' => 0, 'administradoraCodigo' => 10, 'centroCustoCodigo' => 20, 'tipoInclusao' => 'Venda'],
+        ]], 4604);
+        $this->assertSame(1, $result['skipped']);
+    }
+
     private function stored(int $inserted): array
     {
         return ['received' => $inserted, 'inserted' => $inserted, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0];

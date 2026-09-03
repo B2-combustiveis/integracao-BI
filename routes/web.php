@@ -25,6 +25,7 @@ Route::middleware('guest')->group(function (): void {
 
 Route::prefix('admin')->middleware('auth.admin-session')->group(function (): void {
     Route::get('/', [AdminDashboardController::class, 'index'])->name('admin.dashboard');
+    Route::get('/webposto', [AdminDashboardController::class, 'webposto'])->name('admin.webposto');
     Route::get('/services', [AdminDashboardController::class, 'services'])->name('admin.services');
     Route::post('/credentials', [WebPostoCredentialController::class, 'store'])->name('admin.credentials.store');
     Route::post('/credentials/{empresa}/synchronize', [WebPostoCredentialController::class, 'synchronize'])->name('admin.credentials.synchronize');
@@ -35,7 +36,6 @@ Route::prefix('admin')->middleware('auth.admin-session')->group(function (): voi
     Route::post('/services/{service}/resume', [IntegrationServiceController::class, 'resume'])->name('admin.services.resume');
     Route::post('/services/{service}/run', [IntegrationServiceController::class, 'run'])->name('admin.services.run');
     Route::get('/services/{service}/runs/{run}/export', [IntegrationServiceController::class, 'export'])->name('admin.services.runs.export');
-    Route::post('/services/{service}/settings', [IntegrationServiceController::class, 'update'])->name('admin.services.update');
     Route::get('/overview', [AdminDashboardController::class, 'overview'])->name('admin.overview');
     Route::post('/tables/{table}/reload', [AdminDashboardController::class, 'reload'])->name('admin.tables.reload');
     Route::post('/logout', [AdminSessionController::class, 'destroy'])->name('admin.logout');

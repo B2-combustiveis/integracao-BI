@@ -19,10 +19,11 @@ class WebPostoCredentialController extends Controller
         $validated = $request->validate([
             'base_url' => ['required', 'url', 'max:500'],
             'token' => ['required', 'string', 'max:4000'],
+            'base' => ['required', 'in:b1,b2,chimba'],
         ]);
 
         try {
-            $result = $registration->register($validated['base_url'], $validated['token']);
+            $result = $registration->register($validated['base_url'], $validated['token'], $validated['base']);
         } catch (Throwable $exception) {
             return back()->withInput($request->except('token'))->withErrors(['token' => $exception->getMessage()]);
         }

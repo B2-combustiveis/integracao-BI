@@ -45,6 +45,18 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
         'caixas',
         'vendas',
         'titulos_receber',
+        'bicos',
+        'cliente_empresas',
+        'centros_custo',
+        'cartoes',
+        'venda_formas_pagamento',
+        'contas_bancarias',
+        'movimentos_conta',
+        'venda_itens',
+        'abastecimentos',
+        'funcionario_funcoes',
+        'vales_funcionario',
+        'caixas_apresentados',
     ];
 
     public function __construct(public readonly int $runId)

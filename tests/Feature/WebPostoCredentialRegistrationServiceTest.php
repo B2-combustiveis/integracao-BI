@@ -46,13 +46,14 @@ class WebPostoCredentialRegistrationServiceTest extends TestCase
 
         try {
             $result = (new WebPostoCredentialRegistrationService($importer, $bi))
-                ->register('https://webposto.test', 'token-simulado');
+                ->register('https://webposto.test', 'token-simulado', WebPostoCredential::BASE_B2);
 
             $this->assertSame([$empresa], $result['companies']);
             $this->assertSame($before, IntegrationService::query()->count());
             $this->assertDatabaseHas('webposto_credentials', [
                 'empresa_codigo' => $empresa,
                 'ativo' => 1,
+                'base' => WebPostoCredential::BASE_B2,
                 'implantacao_status' => WebPostoCredential::STATUS_AGUARDANDO_SINCRONIZACAO,
             ], 'webposto');
         } finally {

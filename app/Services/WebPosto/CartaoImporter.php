@@ -12,7 +12,7 @@ class CartaoImporter {
   $valid=[];$skipped=0;
   foreach($rows as $row){
    if(!is_array($row)||(int)($row['empresaCodigo']??0)!==$empresa||!isset($row['cartaoCodigo'],$row['vendaCodigo'],$row['administradoraCodigo'],$row['centroCustoCodigo'])){$skipped++;continue;}
-   $saleOptional=(int)$row['vendaCodigo']===0 && ($row['tipoInclusao']??null)==='Troca de Valores';
+   $saleOptional=(int)$row['vendaCodigo']===0 && in_array($row['tipoInclusao']??null,['Troca de Valores','EDI','Serviço'],true);
    if((!$saleOptional&&!isset($sales[(string)$row['vendaCodigo']]))||!isset($admins[(string)$row['administradoraCodigo']],$centers[(string)$row['centroCustoCodigo']])){$skipped++;continue;}
    if($saleOptional)$row['vendaCodigo']=null;
    $valid[]=$row;

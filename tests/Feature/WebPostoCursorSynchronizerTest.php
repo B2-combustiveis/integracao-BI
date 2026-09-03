@@ -161,6 +161,39 @@ class WebPostoCursorSynchronizerTest extends TestCase
         $this->assertSame(10, WebPostoSyncControl::query()->value('last_code'));
     }
 
+    public function test_incremental_run_keeps_a_scanned_cursor_ahead_of_the_local_maximum(): void
+    {
+        WebPostoSyncControl::query()->create([
+            'empresa_codigo' => 115413,
+            'endpoint' => '/INTEGRACAO/ABASTECIMENTO:new-records',
+            'strategy' => 'A',
+            'last_code' => 188352436,
+            'metadata' => ['cursor_type' => 'ultimo_codigo', 'cursor_value' => 188352436],
+        ]);
+        $queries = [];
+        $this->mock(WebPostoClient::class, function (MockInterface $mock) use (&$queries): void {
+            $mock->shouldReceive('get')->once()->andReturnUsing(
+                function (string $endpoint, int $empresa, array $query) use (&$queries): array {
+                    $queries[] = $query;
+
+                    return $this->httpResult(['ultimoCodigo' => 188352436, 'resultados' => []]);
+                },
+            );
+        });
+
+        app(WebPostoCursorSynchronizer::class)->synchronize(
+            endpoint: '/INTEGRACAO/ABASTECIMENTO',
+            empresaCodigo: 115413,
+            persist: fn (): array => [],
+            query: ['limite' => 1000],
+            cursor: ['initial_value' => 0, 'prefer_initial_value' => false],
+            controlKey: '/INTEGRACAO/ABASTECIMENTO:new-records',
+        );
+
+        $this->assertSame(188352436, $queries[0]['ultimoCodigo']);
+        $this->assertSame(188352436, WebPostoSyncControl::query()->value('last_code'));
+    }
+
     public function test_cursor_does_not_advance_when_persistence_fails(): void
     {
         $this->mock(WebPostoClient::class, function (MockInterface $mock): void {
@@ -223,6 +256,59 @@ class WebPostoCursorSynchronizerTest extends TestCase
         $this->assertSame(2, $totals['unchanged']);
     }
 
+    public function test_received_total_uses_the_company_rows_reported_by_persistence(): void
+    {
+        $responses = [
+            $this->httpResult(['ultimoCodigo' => 20, 'resultados' => [
+                ['empresaCodigo' => 4604, 'vendaCodigo' => 10],
+                ['empresaCodigo' => 9999, 'vendaCodigo' => 20],
+            ]]),
+            $this->httpResult(['ultimoCodigo' => 20, 'resultados' => []]),
+        ];
+        $this->mock(WebPostoClient::class, function (MockInterface $mock) use (&$responses): void {
+            $mock->shouldReceive('get')->twice()->andReturnUsing(
+                function () use (&$responses): array {
+                    return array_shift($responses);
+                },
+            );
+        });
+
+        $totals = app(WebPostoCursorSynchronizer::class)->synchronize(
+            endpoint: '/INTEGRACAO/VENDA',
+            empresaCodigo: 4604,
+            persist: fn (): array => ['received' => 1, 'inserted' => 1],
+            query: ['limite' => 1000],
+        );
+
+        $this->assertSame(1, $totals['received']);
+        $this->assertSame(1, $totals['inserted']);
+    }
+
+    public function test_direct_list_resource_accepts_a_resultados_envelope(): void
+    {
+        $this->mock(WebPostoClient::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('get')->once()->andReturn($this->httpResult([
+                'resultados' => [['centroCustoCodigo' => 2048, 'descricao' => 'POSTO']],
+            ]));
+        });
+        $persisted = [];
+
+        $totals = app(WebPostoCursorSynchronizer::class)->synchronize(
+            endpoint: '/INTEGRACAO/CENTRO_CUSTO',
+            empresaCodigo: 115413,
+            persist: function (mixed $payload) use (&$persisted): array {
+                $persisted = $payload['resultados'];
+
+                return ['inserted' => 1];
+            },
+            cursor: ['single_page' => true, 'direct_list' => true],
+        );
+
+        $this->assertSame(2048, $persisted[0]['centroCustoCodigo']);
+        $this->assertSame(1, $totals['received']);
+        $this->assertSame(1, $totals['inserted']);
+    }
+
     public function test_direct_list_resource_fails_for_an_unexpected_payload(): void
     {
         $this->mock(WebPostoClient::class, function (MockInterface $mock): void {
@@ -242,11 +328,11 @@ class WebPostoCursorSynchronizerTest extends TestCase
         );
     }
 
-    public function test_full_reconciliation_resumes_from_last_confirmed_checkpoint(): void
+    public function test_a_cursor_run_can_resume_from_its_last_confirmed_checkpoint(): void
     {
         WebPostoSyncControl::query()->create([
             'empresa_codigo' => 4604,
-            'endpoint' => '/INTEGRACAO/TITULO_PAGAR:full-reconcile',
+            'endpoint' => '/INTEGRACAO/TITULO_PAGAR:resume-test',
             'strategy' => 'A',
             'last_code' => 50,
             'status' => 'error',
@@ -276,7 +362,7 @@ class WebPostoCursorSynchronizerTest extends TestCase
             persist: fn (): array => [],
             query: ['limite' => 1000],
             cursor: ['initial_value' => 1, 'prefer_initial_value' => true],
-            controlKey: '/INTEGRACAO/TITULO_PAGAR:full-reconcile',
+            controlKey: '/INTEGRACAO/TITULO_PAGAR:resume-test',
             resumeFromCheckpoint: true,
             onPageProgress: function (array $state) use (&$progress): void {
                 $progress[] = $state;

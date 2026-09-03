@@ -65,6 +65,8 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      replicas: 9
 
   scheduler:
     build:

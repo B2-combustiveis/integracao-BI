@@ -24,7 +24,7 @@ class AdminDashboardTest extends TestCase
         $overview = [
             'generated_at' => now()->toIso8601String(),
             'connections' => [['key' => 'webposto', 'label' => 'WebPosto', 'status' => 'online', 'database' => 'webposto', 'latency_ms' => 1.2]],
-            'summary' => ['companies' => 1, 'credentials' => 1, 'active_credentials' => 1, 'api_tokens' => 1, 'tables' => 2],
+            'summary' => ['base_1' => 33, 'base_2' => 0, 'api_tokens' => 2, 'tables' => 2],
             'credentials' => [['empresa_codigo' => 4604, 'empresa_nome' => 'Posto Teste', 'base_url' => 'https://webposto.test', 'active' => true, 'last_used' => null]],
             'tables' => [['name' => 'fornecedores', 'records' => 200, 'columns' => 27, 'last_update' => null, 'size_bytes' => 1024, 'modified_sync' => true]],
         ];
@@ -38,7 +38,7 @@ class AdminDashboardTest extends TestCase
     public function test_overview_endpoint_returns_json(): void
     {
         $overview = ['generated_at' => now()->toIso8601String(), 'connections' => [],
-            'summary' => ['companies' => 0, 'credentials' => 0, 'active_credentials' => 0, 'api_tokens' => 0, 'tables' => 0],
+            'summary' => ['base_1' => 0, 'base_2' => 0, 'api_tokens' => 0, 'tables' => 0],
             'credentials' => [], 'tables' => []];
         $this->mock(AdminOverviewService::class, fn (MockInterface $mock) => $mock->shouldReceive('get')->once()->andReturn($overview));
         $this->withoutMiddleware(EnsureAdminSession::class)->getJson('/admin/overview')
@@ -49,7 +49,9 @@ class AdminDashboardTest extends TestCase
     {
         $this->withoutMiddleware(EnsureAdminSession::class)->get('/admin/services')
             ->assertOk()->assertSee('Serviços')->assertSee('Última execução')->assertSee('Ações')
-            ->assertSee('Como funciona')->assertSee('Campos de controle no banco de integração');
+            ->assertSee('Relatórios por execução')->assertSee('Próximo acionamento')
+            ->assertDontSee('Tabelas vinculadas')->assertDontSee('Como funciona')
+            ->assertDontSee('Campos de controle no banco de integração');
     }
 
     public function test_financial_dashboard_is_not_exposed(): void

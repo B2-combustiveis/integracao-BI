@@ -104,6 +104,10 @@ class ReloadValidatedWebPostoTable implements ShouldQueue,ShouldBeUnique {
     $exit=Artisan::call('webposto:load-planos-conta',['tipo'=>$tipo,'empresa'=>$run->empresa_codigo]);
     if($exit!==0)throw new RuntimeException('Falha na carga de planos de conta.');
     $done=[$run->resource];
+   }elseif($run->resource==='centros_custo'){
+    $exit=Artisan::call('webposto:load-centros-custo',['empresa'=>$run->empresa_codigo]);
+    if($exit!==0)throw new RuntimeException('Falha na carga de centros de custo.');
+    $done=['centros_custo'];
    }elseif($run->resource==='lmcs'){
     $exit=Artisan::call('webposto:load-lmcs',['empresa'=>$run->empresa_codigo]);
     if($exit!==0)throw new RuntimeException('Falha na carga de LMCs.');

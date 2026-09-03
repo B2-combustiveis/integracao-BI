@@ -4,6 +4,7 @@ namespace App\Services\Integration;
 
 use App\Jobs\SyncWebPostoDatabase;
 use App\Jobs\SyncWebPostoNewRecords;
+use App\Jobs\SyncWebPostoReconciliation;
 use App\Models\IntegrationService;
 use Illuminate\Support\Facades\DB;
 
@@ -25,8 +26,9 @@ class IntegrationServiceDispatcher
             $service->update(['next_run_at' => now()->addMinutes($service->frequency_minutes)]);
             match ($service->resource) {
                 'webposto-database-changes' => SyncWebPostoDatabase::dispatch($service->id),
-                'webposto-new-records',
-                'webposto-full-reconciliation' => SyncWebPostoNewRecords::dispatch($service->id),
+                'webposto-new-records' => SyncWebPostoNewRecords::dispatch($service->id),
+                'webposto-chimba-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id),
+                'webposto-b2-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id),
                 default => throw new \InvalidArgumentException("Recurso {$service->resource} não possui job."),
             };
         });

@@ -2,6 +2,8 @@
 
 namespace App\Services\WebPosto;
 
+use App\Models\WebPostoCredential;
+
 class WebPostoNewRecordsResourceCatalog
 {
     /** @return array<string, array<string, mixed>> */
@@ -88,20 +90,7 @@ class WebPostoNewRecordsResourceCatalog
                 ],
                 'importer' => LmcImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
-            ],
-            'tanques' => [
-                'endpoint' => '/INTEGRACAO/TANQUE',
-                'table' => 'tanques',
-                'key' => 'tanqueCodigo',
-                'mode' => 'full_reconcile',
-                'query_company_field' => 'empresaCodigo',
-                'limit' => 1000,
-                'query' => [
-                    'dataInicial' => '2000-01-01',
-                    'dataFinal' => now()->toDateString(),
-                ],
-                'importer' => TanqueImporter::class,
-                'updated_field' => 'dataHoraAtualizacao',
+                'reconciliation_updated_period' => true,
             ],
             'bombas' => [
                 'endpoint' => '/INTEGRACAO/BOMBA',
@@ -133,6 +122,19 @@ class WebPostoNewRecordsResourceCatalog
                 'importer' => BicoImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
             ],
+            'tanques' => [
+                'endpoint' => '/INTEGRACAO/TANQUE',
+                'table' => 'tanques',
+                'key' => 'tanqueCodigo',
+                'query_company_field' => 'empresaCodigo',
+                'limit' => 1000,
+                'query' => [
+                    'dataInicial' => '2000-01-01',
+                    'dataFinal' => now()->toDateString(),
+                ],
+                'importer' => TanqueImporter::class,
+                'updated_field' => 'dataHoraAtualizacao',
+            ],
             'funcionario_funcoes' => [
                 'endpoint' => '/INTEGRACAO/FUNCOES',
                 'table' => 'funcionario_funcoes',
@@ -157,6 +159,19 @@ class WebPostoNewRecordsResourceCatalog
                 'importer' => FuncionarioImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
             ],
+            'vales_funcionario' => [
+                'endpoint' => '/INTEGRACAO/VALE_FUNCIONARIO',
+                'table' => 'vales_funcionario',
+                'key' => 'funcionarioCreditoCodigo',
+                'query_company_field' => 'empresaCodigo',
+                'limit' => 1000,
+                'query' => [
+                    'dataInicial' => '2000-01-01',
+                    'dataFinal' => now()->toDateString(),
+                ],
+                'importer' => ValeFuncionarioImporter::class,
+                'updated_field' => 'data',
+            ],
             'caixas' => [
                 'endpoint' => '/INTEGRACAO/CAIXA',
                 'table' => 'caixas',
@@ -169,6 +184,7 @@ class WebPostoNewRecordsResourceCatalog
                 ],
                 'importer' => CaixaImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
+                'reconciliation_updated_period' => true,
             ],
             'caixas_apresentados' => [
                 'endpoint' => '/INTEGRACAO/CAIXA_APRESENTADO',
@@ -182,6 +198,7 @@ class WebPostoNewRecordsResourceCatalog
                 ],
                 'importer' => CaixaApresentadoImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
+                'reconciliation_updated_period' => true,
             ],
             'fornecedores' => [
                 'endpoint' => '/INTEGRACAO/FORNECEDOR',
@@ -232,6 +249,7 @@ class WebPostoNewRecordsResourceCatalog
                 ],
                 'importer' => TituloPagarImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
+                'reconciliation_updated_period' => true,
             ],
             'cliente_grupos' => [
                 'endpoint' => '/INTEGRACAO/GRUPO_CLIENTE',
@@ -325,6 +343,7 @@ class WebPostoNewRecordsResourceCatalog
                 ],
                 'importer' => TituloReceberImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
+                'reconciliation_updated_period' => true,
             ],
             'contas_bancarias' => [
                 'endpoint' => '/INTEGRACAO/CONTA',
@@ -338,6 +357,19 @@ class WebPostoNewRecordsResourceCatalog
                 ],
                 'importer' => ContaBancariaImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
+            ],
+            'movimentos_conta' => [
+                'endpoint' => '/INTEGRACAO/MOVIMENTO_CONTA',
+                'table' => 'movimentos_conta',
+                'key' => 'movimentoContaCodigo',
+                'query_company_field' => 'empresaCodigo',
+                'limit' => 1000,
+                'query' => [
+                    'dataInicial' => '2000-01-01',
+                    'dataFinal' => now()->toDateString(),
+                ],
+                'importer' => MovimentoContaImporter::class,
+                'updated_field' => 'dataMovimento',
             ],
             'venda_itens' => [
                 'endpoint' => '/INTEGRACAO/VENDA_ITEM',
@@ -375,6 +407,18 @@ class WebPostoNewRecordsResourceCatalog
                 'importer' => AdministradoraImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
             ],
+            'centros_custo' => [
+                'endpoint' => '/INTEGRACAO/CENTRO_CUSTO',
+                'table' => 'centros_custo',
+                'key' => 'centroCustoCodigo',
+                'natural_keys' => ['centroCustoCodigo'],
+                'mode' => 'snapshot_new',
+                'company_scoped' => false,
+                'cursor' => ['single_page' => true],
+                'query' => [],
+                'importer' => CentroCustoImporter::class,
+                'updated_field' => 'dataHoraAtualizacao',
+            ],
             'cartoes' => [
                 'endpoint' => '/INTEGRACAO/CARTAO',
                 'table' => 'cartoes',
@@ -392,10 +436,19 @@ class WebPostoNewRecordsResourceCatalog
     }
 
     /** @return array<string, mixed> */
-    public function get(string $resource): array
+    public function get(string $resource, ?string $base = null): array
     {
-        return $this->all()[$resource] ?? throw new \InvalidArgumentException(
+        $definition = $this->all()[$resource] ?? throw new \InvalidArgumentException(
             "Recurso {$resource} nao esta liberado para sincronizacao incremental.",
         );
+
+        if ($base !== null && $base !== WebPostoCredential::BASE_CHIMBA && isset($definition['query']['dataInicial'])) {
+            $definition['query']['dataInicial'] = max(
+                $definition['query']['dataInicial'],
+                (string) config('integration.webposto.recent_base_initial_date'),
+            );
+        }
+
+        return $definition;
     }
 }

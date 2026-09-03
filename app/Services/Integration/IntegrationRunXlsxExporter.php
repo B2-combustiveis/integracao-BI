@@ -4,50 +4,51 @@ namespace App\Services\Integration;
 
 use App\Models\IntegrationServiceRun;
 use OpenSpout\Common\Entity\Row;
-use Illuminate\Support\Facades\DB;
 use OpenSpout\Writer\XLSX\Writer;
 
 class IntegrationRunXlsxExporter
 {
     public function create(IntegrationServiceRun $run): string
     {
-        $run->loadMissing(['service', 'changes']);
+        $run->loadMissing(['service', 'changes', 'companyRuns']);
         $path = tempnam(sys_get_temp_dir(), 'webposto-report-').'.xlsx';
         $writer = new Writer();
         $writer->openToFile($path);
         $writer->getCurrentSheet()->setName('Resumo');
-        $isReconciliation = $run->service->resource === 'webposto-full-reconciliation';
         $duration = $run->started_at
             ? $run->started_at->diffInSeconds($run->finished_at ?? now())
             : null;
         $writer->addRow(Row::fromValues(['campo', 'valor']));
-        foreach ([
+        $summary = [
             'execucao_id' => $run->id,
             'servico' => $run->service->name,
-            'empresa' => $run->service->empresa_codigo,
+            'empresas_processadas' => $run->companyRuns->count(),
+            'empresas_com_sucesso' => $run->companyRuns->where('status', 'success')->count(),
+            'empresas_com_falha' => $run->companyRuns->whereIn('status', ['partial', 'failed'])->count(),
             'status' => $run->status,
             'inicio_execucao' => $run->started_at?->format('Y-m-d H:i:s'),
             'fim_execucao' => $run->finished_at?->format('Y-m-d H:i:s'),
             'duracao_segundos' => $duration,
-            $isReconciliation ? 'atualizados' : 'novos' => $isReconciliation ? $run->updated : $run->inserted,
-        ] as $field => $value) {
+            'novos' => $run->inserted,
+        ];
+        if ($run->service->resource !== 'webposto-new-records') {
+            $summary['atualizados'] = $run->updated;
+        }
+        foreach ($summary as $field => $value) {
             $writer->addRow(Row::fromValues([$field, $value]));
         }
 
+        $this->writeCompaniesSheet($writer, $run);
+
         $changesByResource = $run->changes
-            ->filter(fn ($change): bool => $isReconciliation
-                ? $change->action === 'updated'
-                : $change->action === 'inserted')
-            ->groupBy('resource');
+            ->when(
+                $run->service->resource === 'webposto-new-records',
+                fn ($changes) => $changes->filter(fn ($change): bool => $change->action === 'inserted'),
+            )->groupBy('resource');
         foreach ($changesByResource->keys() as $resource) {
             $changes = $changesByResource->get($resource, collect());
             $sheet = $writer->addNewSheetAndMakeItCurrent();
             $sheet->setName($this->sheetName((string) $resource));
-            if ($isReconciliation) {
-                $this->writeComparisonSheet($writer, (string) $resource, $changes);
-
-                continue;
-            }
             $headers = $changes->reduce(function (array $headers, $change): array {
                 foreach (array_keys($change->payload ?? []) as $field) {
                     if (! in_array($field, $headers, true)) $headers[] = $field;
@@ -55,10 +56,24 @@ class IntegrationRunXlsxExporter
 
                 return $headers;
             }, []);
-            $writer->addRow(Row::fromValues(['_detectadoEm', ...$headers]));
+            $companyNames = $run->companyRuns->mapWithKeys(
+                fn ($company): array => [(int) $company->empresa_codigo => $company->empresa_nome],
+            );
+            $includeUpdateMetadata = $run->service->resource !== 'webposto-new-records';
+            $metadataHeaders = $includeUpdateMetadata ? ['_acao', '_camposAlterados'] : [];
+            $writer->addRow(Row::fromValues(['_empresaCodigo', '_empresaNome', ...$metadataHeaders, '_detectadoEm', ...$headers]));
             foreach ($changes as $change) {
                 $payload = $change->payload ?? [];
-                $values = [$change->detected_at?->format('Y-m-d H:i:s')];
+                $companyCode = $change->natural_key['empresaCodigo'] ?? $payload['empresaCodigo'] ?? null;
+                $values = [
+                    $companyCode,
+                    $companyCode === null ? null : $companyNames->get((int) $companyCode),
+                ];
+                if ($includeUpdateMetadata) {
+                    $values[] = $change->action;
+                    $values[] = implode(', ', $change->changed_fields ?? []);
+                }
+                $values[] = $change->detected_at?->format('Y-m-d H:i:s');
                 foreach ($headers as $field) $values[] = $this->cell($payload[$field] ?? null);
                 $writer->addRow(Row::fromValues($values));
             }
@@ -68,118 +83,29 @@ class IntegrationRunXlsxExporter
         return $path;
     }
 
-    private function writeComparisonSheet(Writer $writer, string $resource, $changes): void
+    private function writeCompaniesSheet(Writer $writer, IntegrationServiceRun $run): void
     {
-        $fields = $changes->reduce(function (array $fields, $change): array {
-            foreach ($change->changed_fields ?? [] as $field) {
-                if (! in_array($field, $fields, true)) $fields[] = $field;
-            }
-
-            return $fields;
-        }, []);
-        $names = $this->comparisonNames($resource, $changes);
-        $tankProducts = $resource === 'tanques' ? $this->tankProducts($changes) : [];
-        $headers = $resource === 'tanques'
-            ? ['_empresaCodigo', '_tanqueNome', '_produtoCodigo', '_produtoNome', '_acao', '_camposAlterados', '_detectadoEm']
-            : ['_empresaCodigo', '_nome', '_acao', '_camposAlterados', '_detectadoEm'];
-        foreach ($fields as $field) {
-            $headers[] = $field.'_anterior';
-            $headers[] = $field.'_novo';
+        $sheet = $writer->addNewSheetAndMakeItCurrent();
+        $sheet->setName('Empresas');
+        $writer->addRow(Row::fromValues([
+            'empresaCodigo', 'empresaNome', 'status', 'recebidos', 'novos', 'atualizados',
+            'inalterados', 'ignorados', 'inicio', 'fim', 'erro',
+        ]));
+        foreach ($run->companyRuns->sortBy('position') as $company) {
+            $writer->addRow(Row::fromValues([
+                $company->empresa_codigo,
+                $company->empresa_nome,
+                $company->status,
+                $company->received,
+                $company->inserted,
+                $company->updated,
+                $company->unchanged,
+                $company->skipped,
+                $company->started_at?->format('Y-m-d H:i:s'),
+                $company->finished_at?->format('Y-m-d H:i:s'),
+                $company->error,
+            ]));
         }
-        $writer->addRow(Row::fromValues($headers));
-        foreach ($changes as $change) {
-            $before = $change->before_payload ?? [];
-            $after = $change->after_payload ?? [];
-            $changedFields = $change->changed_fields ?? [];
-            $values = [
-                $change->natural_key['empresaCodigo'] ?? null,
-                $names[$this->changeKey($change)] ?? null,
-            ];
-            if ($resource === 'tanques') {
-                $product = $tankProducts[$this->changeKey($change)] ?? [];
-                $values[] = $product['codigo'] ?? null;
-                $values[] = $product['nome'] ?? null;
-            }
-            $values[] = 'atualizado';
-            $values[] = implode(', ', $changedFields);
-            $values[] = $change->detected_at?->format('Y-m-d H:i:s');
-            foreach ($fields as $field) {
-                $values[] = in_array($field, $changedFields, true) ? $this->cell($before[$field] ?? null) : null;
-                $values[] = in_array($field, $changedFields, true) ? $this->cell($after[$field] ?? null) : null;
-            }
-            $writer->addRow(Row::fromValues($values));
-        }
-    }
-
-    private function comparisonNames(string $resource, $changes): array
-    {
-        if ($resource === 'tanques') {
-            return $changes->mapWithKeys(fn ($change): array => [
-                $this->changeKey($change) => $change->after_payload['nome']
-                    ?? $change->before_payload['nome']
-                    ?? $change->payload['nome']
-                    ?? null,
-            ])->all();
-        }
-        if ($resource === 'produtos') {
-            return $changes->mapWithKeys(fn ($change): array => [
-                $this->changeKey($change) => $change->after_payload['nome']
-                    ?? $change->before_payload['nome']
-                    ?? $change->payload['nome']
-                    ?? null,
-            ])->all();
-        }
-        if ($resource !== 'produto_empresas') {
-            return [];
-        }
-
-        $companies = $changes->pluck('natural_key.empresaCodigo')->filter()->unique()->values();
-        $products = $changes->pluck('natural_key.produtoCodigo')->filter()->unique()->values();
-
-        return DB::connection('webposto')->table('produtos')
-            ->whereIn('empresaCodigo', $companies)
-            ->whereIn('produtoCodigo', $products)
-            ->get(['empresaCodigo', 'produtoCodigo', 'nome'])
-            ->mapWithKeys(fn (object $product): array => [
-                $product->empresaCodigo.':'.$product->produtoCodigo => $product->nome,
-            ])->all();
-    }
-
-    private function tankProducts($changes): array
-    {
-        $references = $changes->mapWithKeys(function ($change): array {
-            $productCode = $change->after_payload['produtoCodigo']
-                ?? $change->before_payload['produtoCodigo']
-                ?? $change->payload['produtoCodigo']
-                ?? null;
-
-            return [$this->changeKey($change) => [
-                'empresa' => $change->natural_key['empresaCodigo'] ?? null,
-                'codigo' => $productCode,
-            ]];
-        });
-        $companies = $references->pluck('empresa')->filter()->unique()->values();
-        $products = $references->pluck('codigo')->filter()->unique()->values();
-        $names = DB::connection('webposto')->table('produtos')
-            ->whereIn('empresaCodigo', $companies)
-            ->whereIn('produtoCodigo', $products)
-            ->get(['empresaCodigo', 'produtoCodigo', 'nome'])
-            ->mapWithKeys(fn (object $product): array => [
-                $product->empresaCodigo.':'.$product->produtoCodigo => $product->nome,
-            ]);
-
-        return $references->map(fn (array $reference): array => [
-            'codigo' => $reference['codigo'],
-            'nome' => $names->get($reference['empresa'].':'.$reference['codigo']),
-        ])->all();
-    }
-
-    private function changeKey($change): string
-    {
-        return ($change->natural_key['empresaCodigo'] ?? '').':'
-            .($change->natural_key['produtoCodigo']
-                ?? $change->natural_key['tanqueCodigo']
-                ?? '');
     }
 
     private function sheetName(string $resource): string

@@ -3,6 +3,7 @@
 namespace App\Services\Admin;
 
 use App\Models\IntegrationService;
+use App\Models\WebPostoCredential;
 use App\Models\WebPostoInitialSyncRun;
 use App\Models\WebPostoReloadRun;
 use App\Services\WebPosto\WebPostoNewRecordsResourceCatalog;
@@ -20,6 +21,7 @@ class AdminOverviewService
     public function get(?int $empresaCodigo = null): array
     {
         $tables = $this->tables($empresaCodigo);
+        $bases = $this->webPostoBaseCounts();
         $connections = collect(['mysql' => 'Integração', 'webposto' => 'WebPosto', 'bi' => 'BI'])
             ->map(fn (string $label, string $connection): array => $this->connection($connection, $label))->values()->all();
 
@@ -27,9 +29,9 @@ class AdminOverviewService
             'generated_at' => now()->toIso8601String(),
             'connections' => $connections,
             'summary' => [
-                'companies' => $this->safeCount('webposto', 'empresas'),
-                'credentials' => $this->safeCount('webposto', 'webposto_credentials'),
-                'api_tokens' => $this->safeCount('mysql', 'api_tokens'),
+                'base_1' => $bases['base_1'],
+                'base_2' => $bases['base_2'],
+                'api_tokens' => $this->webPostoApiTokenCount(),
                 'tables' => count($tables),
             ],
             'credentials' => $this->credentials(),
@@ -37,6 +39,33 @@ class AdminOverviewService
             'reloads' => $this->reloads(),
             'selected_company' => $empresaCodigo,
         ];
+    }
+
+    /** @return array{base_1: int, base_2: int} */
+    private function webPostoBaseCounts(): array
+    {
+        try {
+            return [
+                'base_1' => WebPostoCredential::query()->where('ativo', true)->where('base', WebPostoCredential::BASE_B1)->count(),
+                'base_2' => WebPostoCredential::query()->where('ativo', true)->where('base', WebPostoCredential::BASE_B2)->count(),
+            ];
+        } catch (Throwable) {
+            return ['base_1' => 0, 'base_2' => 0];
+        }
+    }
+
+    private function webPostoApiTokenCount(): int
+    {
+        try {
+            return WebPostoCredential::query()
+                ->where('ativo', true)
+                ->get(['token'])
+                ->map(fn (WebPostoCredential $credential): string => hash('sha256', $credential->token))
+                ->unique()
+                ->count();
+        } catch (Throwable) {
+            return 0;
+        }
     }
 
     private function connection(string $connection, string $label): array
@@ -58,13 +87,10 @@ class AdminOverviewService
             $newRecordsTables = collect($this->serviceResources('webposto-new-records'))
                 ->map(fn (string $resource) => $catalog[$resource]['table'] ?? null)
                 ->filter()->unique()->values()->all();
-            $reconciliationTables = collect($this->serviceResources('webposto-full-reconciliation'))
-                ->map(fn (string $resource) => $catalog[$resource]['table'] ?? null)
-                ->filter()->unique()->values()->all();
             $rows = DB::connection('webposto')->table('information_schema.TABLES')
                 ->where('TABLE_SCHEMA', $database)->where('TABLE_TYPE', 'BASE TABLE')
                 ->orderBy('TABLE_NAME')->get(['TABLE_NAME', 'DATA_LENGTH', 'INDEX_LENGTH']);
-            return $rows->map(function (object $row) use ($newRecordsTables, $reconciliationTables, $empresaCodigo): array {
+            return $rows->map(function (object $row) use ($newRecordsTables, $empresaCodigo): array {
                 $table = $row->TABLE_NAME;
                 $columns = Schema::connection('webposto')->getColumnListing($table);
                 $query = DB::connection('webposto')->table($table);
@@ -76,8 +102,7 @@ class AdminOverviewService
                 return ['name' => $table, 'records' => (clone $query)->count(),
                     'columns' => count($columns), 'last_update' => $updated,
                     'size_bytes' => (int) $row->DATA_LENGTH + (int) $row->INDEX_LENGTH,
-                    'new_records_sync' => in_array($table, $newRecordsTables, true),
-                    'full_reconciliation_sync' => in_array($table, $reconciliationTables, true)];
+                    'new_records_sync' => in_array($table, $newRecordsTables, true)];
             })->all();
         } catch (Throwable) {
             return [];
@@ -108,10 +133,11 @@ class AdminOverviewService
             return DB::connection('webposto')->table('webposto_credentials as credentials')
                 ->leftJoin('empresas', 'empresas.empresaCodigo', '=', 'credentials.empresa_codigo')
                 ->orderBy('credentials.empresa_codigo')
-                ->get(['credentials.empresa_codigo', 'credentials.implantacao_status',
+                ->get(['credentials.empresa_codigo', 'credentials.base', 'credentials.implantacao_status',
                     'empresas.fantasia', 'empresas.razao'])
                 ->map(fn (object $item): array => ['empresa_codigo' => $item->empresa_codigo,
                     'empresa_nome' => $item->fantasia ?: ($item->razao ?: "Empresa {$item->empresa_codigo}"),
+                    'base' => $item->base,
                     'onboarding_status' => $item->implantacao_status,
                     'initial_sync' => ($run = $runs->get($item->empresa_codigo)) ? [
                         'id' => $run->id,

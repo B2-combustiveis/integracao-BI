@@ -22,6 +22,11 @@ class AdminDashboardController extends Controller
         return view('admin.dashboard', ['overview' => $overview->get()]);
     }
 
+    public function webposto(AdminOverviewService $overview): View
+    {
+        return view('admin.webposto', ['overview' => $overview->get()]);
+    }
+
     public function overview(Request $request, AdminOverviewService $overview): JsonResponse
     {
         $empresa = $request->validate([

@@ -6,6 +6,12 @@ use Illuminate\Database\Eloquent\Model;
 
 class WebPostoCredential extends Model
 {
+    public const BASE_B1 = 'b1';
+
+    public const BASE_B2 = 'b2';
+
+    public const BASE_CHIMBA = 'chimba';
+
     public const STATUS_AGUARDANDO_SINCRONIZACAO = 'aguardando_sincronizacao';
 
     public const STATUS_SINCRONIZADO = 'sincronizado';
@@ -18,6 +24,7 @@ class WebPostoCredential extends Model
         'empresa_codigo',
         'base_url',
         'token',
+        'base',
         'ativo',
         'implantacao_status',
         'carga_inicial_iniciada_em',

@@ -58,11 +58,12 @@ class WebPostoCursorSynchronizer
             && $control->status === 'error'
             && (int) $control->last_code > $initialValue;
         $pageOffset = $canResume ? (int) ($metadata['checkpoint_page'] ?? 0) : 0;
+        $persistedCursor = is_numeric($metadata['cursor_value'] ?? null)
+            ? (int) $metadata['cursor_value']
+            : (int) $control->last_code;
         $current = $canResume ? (int) $control->last_code : ($preferInitialValue
             ? $initialValue
-            : (is_numeric($metadata['cursor_value'] ?? null)
-                ? (int) $metadata['cursor_value']
-                : (int) $control->last_code));
+            : max($initialValue, $persistedCursor));
         $initialLoad = $control->wasRecentlyCreated;
         $totals = [
             'pages' => 0,
@@ -124,11 +125,16 @@ class WebPostoCursorSynchronizer
                 }
 
                 $payload = $result['payload'];
-                if ($directList && (! is_array($payload) || ! array_is_list($payload))) {
+                $directRows = $directList && is_array($payload) && array_is_list($payload)
+                    ? $payload
+                    : ($directList && is_array($payload) && is_array($payload['resultados'] ?? null)
+                        ? $payload['resultados']
+                        : null);
+                if ($directList && $directRows === null) {
                     throw new RuntimeException('Formato de lista direta inesperado em '.$endpoint.'.');
                 }
                 $rows = $directList
-                    ? $payload
+                    ? $directRows
                     : (is_array($payload) && is_array($payload['resultados'] ?? null)
                         ? $payload['resultados']
                         : []);
@@ -150,7 +156,9 @@ class WebPostoCursorSynchronizer
                     fn (): array => $persist($persistPayload, $requestQuery),
                 );
                 $totals['pages']++;
-                $totals['received'] += count($rows);
+                $totals['received'] += array_key_exists('received', $stored)
+                    ? (int) $stored['received']
+                    : count($rows);
                 foreach (['inserted', 'updated', 'unchanged', 'skipped'] as $field) {
                     $totals[$field] += (int) ($stored[$field] ?? 0);
                 }
@@ -184,7 +192,7 @@ class WebPostoCursorSynchronizer
 
             throw new RuntimeException("Limite de paginacao atingido em {$endpoint}.");
         } catch (Throwable $exception) {
-            $message = mb_substr($exception->getMessage(), 0, 2000);
+            $message = mb_substr((string) preg_replace('/([?&]chave=)[^&\s]+/i', '$1SEU_TOKEN_AQUI', $exception->getMessage()), 0, 2000);
             $control->update([
                 'status' => 'error',
                 'last_completed_at' => now(),

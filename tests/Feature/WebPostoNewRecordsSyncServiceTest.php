@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\SyncWebPostoCompanyNewRecords;
 use App\Jobs\SyncWebPostoNewRecords;
 use App\Models\IntegrationService;
 use App\Models\IntegrationServiceRun;
@@ -12,9 +13,15 @@ use App\Services\WebPosto\WebPostoCursorSynchronizer;
 use App\Services\WebPosto\WebPostoNewRecordsResourceCatalog;
 use App\Services\WebPosto\WebPostoNewRecordsSyncService;
 use App\Services\WebPosto\WebPostoPendingRecordService;
+use App\Services\WebPosto\CartaoImporter;
+use App\Services\WebPosto\CentroCustoImporter;
+use App\Services\WebPosto\ContaBancariaImporter;
+use App\Services\WebPosto\MovimentoContaImporter;
+use App\Services\WebPosto\ValeFuncionarioImporter;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Mockery;
 use RuntimeException;
@@ -54,6 +61,7 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
             $table->unsignedBigInteger('empresa_codigo')->unique();
             $table->string('base_url');
             $table->text('token');
+            $table->string('base')->default('b1');
             $table->boolean('ativo')->default(true);
             $table->string('implantacao_status')->default('aguardando_sincronizacao');
             $table->timestamps();
@@ -108,7 +116,7 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
             'updated_field' => 'dataHoraAtualizacao',
         ];
         $catalog = Mockery::mock(WebPostoNewRecordsResourceCatalog::class);
-        $catalog->shouldReceive('get')->once()->with('strict')->andReturn($definition);
+        $catalog->shouldReceive('get')->once()->with('strict', 'b1')->andReturn($definition);
         $synchronizer = Mockery::mock(WebPostoCursorSynchronizer::class);
         $synchronizer->shouldReceive('synchronize')->once()->andReturnUsing(function (...$arguments): array {
             $persist = $arguments[2];
@@ -151,88 +159,6 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
         $this->assertSame(1, $run->fresh()->inserted);
     }
 
-    public function test_forced_full_reconcile_restarts_at_one_and_updates_existing_rows(): void
-    {
-        DB::connection('webposto')->table('strict_new_records')->insert([
-            [
-                'empresaCodigo' => 4604,
-                'registroCodigo' => 10,
-                'nome' => 'Original',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
-            [
-                'empresaCodigo' => 9999,
-                'registroCodigo' => 10,
-                'nome' => 'Outra empresa',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
-        ]);
-        $service = IntegrationService::query()->create([
-            'name' => 'Full reconcile test',
-            'slug' => 'full-reconcile-'.str()->uuid(),
-            'category' => 'cadastros',
-            'resource' => 'webposto-new-records',
-            'empresa_codigo' => 4604,
-            'settings' => ['resources' => ['strict']],
-        ]);
-        $this->serviceIds[] = $service->id;
-        $run = IntegrationServiceRun::query()->create([
-            'integration_service_id' => $service->id,
-            'status' => 'running',
-            'started_at' => now(),
-        ]);
-        $definition = [
-            'endpoint' => '/STRICT',
-            'table' => 'strict_new_records',
-            'key' => 'registroCodigo',
-            'limit' => 1000,
-            'cursor' => ['single_page' => true],
-            'query' => ['dataInicial' => '2000-01-01', 'dataFinal' => '2026-08-26'],
-            'importer' => FullReconcileStrictImporter::class,
-            'updated_field' => 'dataHoraAtualizacao',
-        ];
-        $catalog = Mockery::mock(WebPostoNewRecordsResourceCatalog::class);
-        $catalog->shouldReceive('get')->once()->with('strict')->andReturn($definition);
-        $synchronizer = Mockery::mock(WebPostoCursorSynchronizer::class);
-        $synchronizer->shouldReceive('synchronize')->once()->andReturnUsing(function (...$arguments): array {
-            $this->assertSame(1, $arguments[4]['initial_value']);
-            $this->assertTrue($arguments[4]['prefer_initial_value']);
-            $this->assertTrue($arguments[4]['single_page']);
-            $this->assertSame('2000-01-01', $arguments[3]['dataInicial']);
-            $stored = $arguments[2](['resultados' => [[
-                'registroCodigo' => 10,
-                'nome' => 'Atualizado',
-                'dataHoraAtualizacao' => '2026-08-26 12:00:00',
-            ]]], ['ultimoCodigo' => 1]);
-
-            return ['pages' => 1, 'received' => 1, ...$stored];
-        });
-        $subject = new WebPostoNewRecordsSyncService(
-            $catalog,
-            $synchronizer,
-            app(IntegrationRunChangeRecorder::class),
-            Mockery::mock(WebPostoClient::class),
-            app(WebPostoPendingRecordService::class),
-        );
-
-        $result = $subject->synchronize(4604, ['strict'], $run->id, forceFullReconcile: true);
-
-        $this->assertSame(1, $result['strict']['updated']);
-        $this->assertDatabaseHas('strict_new_records', [
-            'empresaCodigo' => 4604,
-            'registroCodigo' => 10,
-            'nome' => 'Atualizado',
-        ], 'webposto');
-        $this->assertDatabaseHas('strict_new_records', [
-            'empresaCodigo' => 9999,
-            'registroCodigo' => 10,
-            'nome' => 'Outra empresa',
-        ], 'webposto');
-        $this->assertSame('updated', $run->fresh()->changes()->sole()->action);
-    }
-
     public function test_successful_snapshot_normalizes_a_legacy_cursor_error(): void
     {
         $service = IntegrationService::query()->create([
@@ -249,9 +175,10 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
             'status' => 'running',
             'started_at' => now(),
         ]);
-        $control = WebPostoSyncControl::query()->create([
+        $control = WebPostoSyncControl::query()->updateOrCreate([
             'empresa_codigo' => 4604,
             'endpoint' => '/INTEGRACAO/BOMBA:new-records',
+        ], [
             'strategy' => 'B',
             'last_code' => 6857,
             'status' => 'error',
@@ -270,7 +197,7 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
             'updated_field' => 'dataHoraAtualizacao',
         ];
         $catalog = Mockery::mock(WebPostoNewRecordsResourceCatalog::class);
-        $catalog->shouldReceive('get')->once()->with('bombas')->andReturn($definition);
+        $catalog->shouldReceive('get')->once()->with('bombas', 'b1')->andReturn($definition);
         $client = Mockery::mock(WebPostoClient::class);
         $response = Mockery::mock();
         $response->shouldReceive('successful')->once()->andReturnTrue();
@@ -367,7 +294,7 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
         )->all());
     }
 
-    public function test_full_reconciliation_finishes_one_company_before_starting_the_next(): void
+    public function test_new_records_dispatches_one_job_per_company_and_aggregates_the_run(): void
     {
         DB::connection('webposto')->table('empresas')->insert([
             'empresaCodigo' => 9999,
@@ -384,15 +311,20 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
             'updated_at' => now(),
         ]);
         $service = IntegrationService::query()->create([
-            'name' => 'Multi-company reconciliation test',
-            'slug' => 'multi-company-reconciliation-'.str()->uuid(),
+            'name' => 'Multi-company new records test',
+            'slug' => 'multi-company-new-records-'.str()->uuid(),
             'category' => 'cadastros',
-            'resource' => 'webposto-full-reconciliation',
+            'resource' => 'webposto-new-records',
             'empresa_codigo' => 4604,
             'frequency_minutes' => 1440,
             'settings' => ['resources' => ['tanques', 'bombas', 'bicos']],
         ]);
         $this->serviceIds[] = $service->id;
+
+        Queue::fake([SyncWebPostoCompanyNewRecords::class]);
+        (new SyncWebPostoNewRecords($service->id))->handle();
+        Queue::assertPushed(SyncWebPostoCompanyNewRecords::class, 2);
+
         $calls = [];
         $synchronizer = Mockery::mock(WebPostoNewRecordsSyncService::class);
         $synchronizer->shouldReceive('synchronize')->twice()
@@ -401,12 +333,10 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
                 array $resources,
                 int $runId,
                 ?callable $onProgress = null,
-                bool $forceFullReconcile = false,
             ) use (&$calls): array {
                 $calls[] = [
                     'empresa' => $empresa,
                     'resources' => $resources,
-                    'force_full_reconcile' => $forceFullReconcile,
                 ];
                 $results = [];
                 foreach ($resources as $resource) {
@@ -429,18 +359,20 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
                 return $results;
             });
 
-        (new SyncWebPostoNewRecords($service->id))->handle($synchronizer);
+        // Simulates the queue workers picking up each per-company job (order is
+        // deterministic here because the parent dispatches them in empresa_codigo order).
+        Queue::pushed(SyncWebPostoCompanyNewRecords::class)->each(
+            fn (SyncWebPostoCompanyNewRecords $job) => $job->handle($synchronizer),
+        );
 
         $this->assertSame([
             [
                 'empresa' => 4604,
                 'resources' => ['tanques', 'bombas', 'bicos'],
-                'force_full_reconcile' => true,
             ],
             [
                 'empresa' => 9999,
                 'resources' => ['tanques', 'bombas', 'bicos'],
-                'force_full_reconcile' => true,
             ],
         ], $calls);
 
@@ -463,6 +395,35 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
                     'status' => $company->status,
                 ])->all(),
         );
+    }
+
+    public function test_new_records_excludes_chimba_from_the_eligible_companies(): void
+    {
+        DB::connection('webposto')->table('webposto_credentials')
+            ->where('empresa_codigo', 4604)
+            ->update(['base' => 'chimba']);
+        $service = IntegrationService::query()->create([
+            'name' => 'Exclude Chimba from new records test',
+            'slug' => 'exclude-chimba-new-records-'.str()->uuid(),
+            'category' => 'cadastros',
+            'resource' => 'webposto-new-records',
+            'empresa_codigo' => 4604,
+            'frequency_minutes' => 1440,
+            'settings' => ['resources' => ['strict']],
+        ]);
+        $this->serviceIds[] = $service->id;
+
+        Queue::fake([SyncWebPostoCompanyNewRecords::class]);
+        (new SyncWebPostoNewRecords($service->id))->handle();
+
+        Queue::assertNothingPushed();
+        $run = IntegrationServiceRun::query()
+            ->where('integration_service_id', $service->id)
+            ->latest('id')
+            ->firstOrFail();
+        $this->assertSame('failed', $run->status);
+        $this->assertSame('Nenhum posto sincronizado e ativo foi encontrado.', $run->error);
+        $this->assertCount(0, $run->companyRuns);
     }
 
     public function test_emp_ignores_a_company_that_is_still_awaiting_initial_load(): void
@@ -501,6 +462,18 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
         $this->assertSame(1, (new SyncWebPostoNewRecords(123))->tries);
     }
 
+    public function test_bi_financial_resources_have_their_dependencies_available(): void
+    {
+        $catalog = app(WebPostoNewRecordsResourceCatalog::class);
+
+        $this->assertSame('/INTEGRACAO/CONTA', $catalog->get('contas_bancarias')['endpoint']);
+        $this->assertSame(ContaBancariaImporter::class, $catalog->get('contas_bancarias')['importer']);
+        $this->assertSame(MovimentoContaImporter::class, $catalog->get('movimentos_conta')['importer']);
+        $this->assertSame(CartaoImporter::class, $catalog->get('cartoes')['importer']);
+        $this->assertSame(CentroCustoImporter::class, $catalog->get('centros_custo')['importer']);
+        $this->assertSame(ValeFuncionarioImporter::class, $catalog->get('vales_funcionario')['importer']);
+    }
+
     public function test_a_failure_does_not_erase_progress_already_recorded_by_resources(): void
     {
         $service = IntegrationService::query()->create([
@@ -513,6 +486,10 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
             'settings' => ['resources' => ['first', 'second']],
         ]);
         $this->serviceIds[] = $service->id;
+
+        Queue::fake([SyncWebPostoCompanyNewRecords::class]);
+        (new SyncWebPostoNewRecords($service->id))->handle();
+
         $synchronizer = Mockery::mock(WebPostoNewRecordsSyncService::class);
         $synchronizer->shouldReceive('synchronize')->once()
             ->andReturnUsing(function (int $empresa, array $resources, int $runId): never {
@@ -523,7 +500,9 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
                 throw new RuntimeException('Falha na segunda tabela.');
             });
 
-        (new SyncWebPostoNewRecords($service->id))->handle($synchronizer);
+        Queue::pushed(SyncWebPostoCompanyNewRecords::class)->each(
+            fn (SyncWebPostoCompanyNewRecords $job) => $job->handle($synchronizer),
+        );
 
         $run = IntegrationServiceRun::query()->where('integration_service_id', $service->id)->latest('id')->firstOrFail();
         $this->assertSame('failed', $run->status);
@@ -538,33 +517,6 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
     }
 }
 
-class FullReconcileStrictImporter
-{
-    public function import(mixed $payload, int $empresa, array $parameters = []): array
-    {
-        $rows = $payload['resultados'] ?? [];
-        $inserted = $updated = 0;
-        foreach ($rows as $row) {
-            $query = DB::connection('webposto')->table('strict_new_records')
-                ->where('empresaCodigo', $empresa)
-                ->where('registroCodigo', $row['registroCodigo']);
-            $exists = $query->exists();
-            DB::connection('webposto')->table('strict_new_records')->updateOrInsert(
-                ['empresaCodigo' => $empresa, 'registroCodigo' => $row['registroCodigo']],
-                ['nome' => $row['nome'], 'updated_at' => now(), ...($exists ? [] : ['created_at' => now()])],
-            );
-            $exists ? $updated++ : $inserted++;
-        }
-
-        return [
-            'received' => count($rows),
-            'inserted' => $inserted,
-            'updated' => $updated,
-            'unchanged' => 0,
-            'skipped' => 0,
-        ];
-    }
-}
 class StrictNewRecordImporter
 {
     public static array $payload = [];

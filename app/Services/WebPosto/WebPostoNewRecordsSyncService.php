@@ -3,6 +3,7 @@
 namespace App\Services\WebPosto;
 
 use App\Models\IntegrationServiceRun;
+use App\Models\WebPostoCredential;
 use App\Models\WebPostoSyncControl;
 use App\Services\Integration\IntegrationRunChangeRecorder;
 use Illuminate\Support\Facades\DB;
@@ -25,27 +26,17 @@ class WebPostoNewRecordsSyncService
         array $resources,
         int $runId,
         ?callable $onProgress = null,
-        bool $forceFullReconcile = false,
-        bool $continueOnResourceFailure = false,
     ): array {
         $results = [];
+        $base = WebPostoCredential::query()->where('empresa_codigo', $empresa)->value('base');
         foreach (array_values(array_unique($resources)) as $resource) {
-            $definition = $this->catalog->get($resource);
+            $definition = $this->catalog->get($resource, $base);
             if ($onProgress !== null) {
                 $onProgress('running', $resource, null);
             }
             try {
                 $retried = $this->pendingRecords->retry($definition, $empresa, $runId, $resource);
                 $this->recordProgress($runId, $retried);
-                if ($forceFullReconcile || ($definition['mode'] ?? 'cursor') === 'full_reconcile') {
-                    $synchronized = $this->synchronizeFullReconcile($definition, $empresa, $runId, $resource, $onProgress);
-                    $results[$resource] = $this->mergeResults($retried, $synchronized);
-                    if ($onProgress !== null) {
-                        $onProgress('completed', $resource, $results[$resource]);
-                    }
-
-                    continue;
-                }
                 if (($definition['mode'] ?? 'cursor') === 'snapshot_new') {
                     $synchronized = $this->synchronizeSnapshotNew($definition, $empresa, $runId, $resource);
                     $results[$resource] = $this->mergeResults($retried, $synchronized);
@@ -109,14 +100,15 @@ class WebPostoNewRecordsSyncService
                             ])->values()->all();
                         $this->changeRecorder->record($runId, $resource, $definition['table'], $changes);
                         $this->pendingRecords->storeMissing($definition, $empresa, $runId, $resource, $newRows->all(), $parameters);
-                        $this->recordProgress($runId, [...$stored, 'received' => $rows->count()]);
+                        $stored = [...$stored, 'received' => $rows->count()];
+                        $this->recordProgress($runId, $stored);
 
                         return $stored;
                     },
                     query: $query,
                     cursor: [
                         'initial_value' => $initialCursor,
-                        'prefer_initial_value' => true,
+                        'prefer_initial_value' => false,
                         ...($definition['cursor'] ?? []),
                     ],
                     initialQuery: null,
@@ -132,136 +124,11 @@ class WebPostoNewRecordsSyncService
                     $onProgress('completed', $resource, $results[$resource]);
                 }
             } catch (Throwable $exception) {
-                if (! $continueOnResourceFailure) {
-                    throw $exception;
-                }
-
-                $results[$resource] = [
-                    'status' => 'failed',
-                    'error' => mb_substr($exception->getMessage(), 0, 2000),
-                    'received' => 0,
-                    'inserted' => 0,
-                    'updated' => 0,
-                    'unchanged' => 0,
-                    'skipped' => 0,
-                ];
-                if ($onProgress !== null) {
-                    $onProgress('failed', $resource, $results[$resource]);
-                }
+                throw $exception;
             }
         }
 
         return $results;
-    }
-
-    /** @param array<string, mixed> $definition @return array<string, int> */
-    private function synchronizeFullReconcile(
-        array $definition,
-        int $empresa,
-        int $runId,
-        string $resource,
-        ?callable $onProgress,
-    ): array {
-        $query = $definition['query'];
-        if (! ($definition['cursor']['direct_list'] ?? false)) {
-            $query['limite'] = (int) ($definition['limit'] ?? $query['limite'] ?? 1000);
-        }
-
-        return $this->synchronizer->synchronize(
-            endpoint: $definition['endpoint'],
-            empresaCodigo: $empresa,
-            persist: function (mixed $payload, array $parameters) use ($definition, $empresa, $runId, $resource): array {
-                $companyField = $definition['company_field'] ?? 'empresaCodigo';
-                $key = $definition['key'];
-                $rows = collect(is_array($payload) && is_array($payload['resultados'] ?? null)
-                    ? $payload['resultados'] : [])
-                    ->filter(fn ($row) => is_array($row)
-                        && isset($row[$key])
-                        && (! isset($row[$companyField]) || (int) $row[$companyField] === $empresa))
-                    ->map(fn (array $row): array => isset($row[$companyField])
-                        ? $row
-                        : [$companyField => $empresa, ...$row])
-                    ->unique(fn (array $row): string => (string) $row[$key])
-                    ->values();
-                $keys = $rows->pluck($key)->all();
-                $before = DB::connection('webposto')->table($definition['table'])
-                    ->where($companyField, $empresa)
-                    ->whereIn($key, $keys)
-                    ->get()
-                    ->mapWithKeys(fn (object $row): array => [(string) $row->{$key} => (array) $row])
-                    ->all();
-                $filteredPayload = is_array($payload)
-                    ? [...$payload, 'resultados' => $rows->all()]
-                    : ['resultados' => $rows->all()];
-                $stored = app($definition['importer'])->import($filteredPayload, $empresa, $parameters);
-                $after = DB::connection('webposto')->table($definition['table'])
-                    ->where($companyField, $empresa)
-                    ->whereIn($key, $keys)
-                    ->get()
-                    ->mapWithKeys(fn (object $row): array => [(string) $row->{$key} => (array) $row])
-                    ->all();
-                $changes = $rows->map(function (array $row) use ($before, $after, $key, $empresa, $definition): ?array {
-                    $value = (string) $row[$key];
-                    if (! isset($after[$value])) {
-                        return null;
-                    }
-                    $beforePayload = isset($before[$value])
-                        ? collect($before[$value])->except(['created_at', 'updated_at'])->all()
-                        : null;
-                    $afterPayload = collect($after[$value])
-                        ->except(['created_at', 'updated_at'])->all();
-                    $changedFields = $beforePayload === null
-                        ? array_keys($afterPayload)
-                        : collect(array_unique([
-                            ...array_keys($beforePayload),
-                            ...array_keys($afterPayload),
-                        ]))->filter(fn (string $field): bool => ($beforePayload[$field] ?? null) != ($afterPayload[$field] ?? null)
-                        )->values()->all();
-                    $action = $beforePayload === null
-                        ? 'inserted'
-                        : ($changedFields === [] ? null : 'updated');
-                    if ($action === null) {
-                        return null;
-                    }
-
-                    return [
-                        'action' => $action,
-                        'natural_key' => ['empresaCodigo' => $empresa, $key => $row[$key]],
-                        'source_updated_at' => $row[$definition['updated_field']] ?? null,
-                        'payload' => $row,
-                        'before_payload' => $beforePayload,
-                        'after_payload' => $afterPayload,
-                        'changed_fields' => $changedFields,
-                    ];
-                })->filter()->values()->all();
-                $this->changeRecorder->record($runId, $resource, $definition['table'], $changes);
-                $this->pendingRecords->storeMissing(
-                    $definition,
-                    $empresa,
-                    $runId,
-                    $resource,
-                    $rows->all(),
-                    $parameters,
-                );
-                $stored['received'] = $rows->count();
-                $this->recordProgress($runId, $stored);
-
-                return $stored;
-            },
-            query: $query,
-            cursor: [
-                'initial_value' => 1,
-                'prefer_initial_value' => true,
-                ...($definition['cursor'] ?? []),
-            ],
-            initialQuery: null,
-            integrationServiceRunId: $runId,
-            controlKey: $definition['endpoint'].':full-reconcile',
-            resumeFromCheckpoint: true,
-            onPageProgress: $onProgress === null
-                ? null
-                : fn (array $progress) => $onProgress('progress', $resource, $progress),
-        );
     }
 
     /** @param array<string, mixed> $definition @return array<string, int> */
@@ -341,18 +208,25 @@ class WebPostoNewRecordsSyncService
         ]);
     }
 
-    /** @param array<string, int> $stored */
+    /**
+     * Atomic SQL increment: multiple companies of the same run can call this concurrently
+     * (one worker per company), so a read-then-write update here would lose increments.
+     *
+     * @param array<string, int> $stored
+     */
     private function recordProgress(int $runId, array $stored): void
     {
-        $run = IntegrationServiceRun::query()->find($runId);
-        if ($run === null) {
+        $increments = [];
+        foreach (['received', 'inserted', 'updated', 'unchanged', 'skipped'] as $field) {
+            $delta = (int) ($stored[$field] ?? 0);
+            if ($delta !== 0) {
+                $increments[$field] = DB::raw("{$field} + {$delta}");
+            }
+        }
+        if ($increments === []) {
             return;
         }
-        $progress = [];
-        foreach (['received', 'inserted', 'updated', 'unchanged', 'skipped'] as $field) {
-            $progress[$field] = (int) $run->{$field} + (int) ($stored[$field] ?? 0);
-        }
-        $run->update($progress);
+        IntegrationServiceRun::query()->whereKey($runId)->update($increments);
     }
 
     /** @param array<string, int> $first @param array<string, int> $second @return array<string, int> */

@@ -44,6 +44,7 @@ class WebPostoClient
                 CURLOPT_LOW_SPEED_LIMIT => 1,
                 CURLOPT_LOW_SPEED_TIME => $timeout,
             ]])
+            ->retry(config('integration.webposto.retry_delays_ms', [500, 1500, 3000]), throw: false)
             ->get($baseUrl.'/'.ltrim($endpoint, '/'), [
                 'chave' => $token,
                 ...$query,

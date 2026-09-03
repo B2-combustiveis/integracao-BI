@@ -11,7 +11,6 @@ use App\Services\WebPosto\FuncionarioImporter;
 use App\Services\WebPosto\EstoquePeriodoImporter;
 use App\Services\WebPosto\LmcImporter;
 use App\Services\WebPosto\ProdutoLmcLmpImporter;
-use App\Services\WebPosto\TanqueImporter;
 use App\Services\WebPosto\WebPostoNewRecordsResourceCatalog;
 use Tests\TestCase;
 
@@ -28,13 +27,6 @@ class WebPostoNewRecordsResourceCatalogTest extends TestCase
         $this->assertSame(EstoquePeriodoImporter::class, $catalog['estoque_periodos']['importer']);
         $this->assertSame('lmcCodigo', $catalog['lmcs']['key']);
         $this->assertSame(LmcImporter::class, $catalog['lmcs']['importer']);
-        $this->assertSame('tanqueCodigo', $catalog['tanques']['key']);
-        $this->assertSame('full_reconcile', $catalog['tanques']['mode']);
-        $this->assertSame('2000-01-01', $catalog['tanques']['query']['dataInicial']);
-        $this->assertSame(TanqueImporter::class, $catalog['tanques']['importer']);
-        $this->assertSame(['tanques'], collect($catalog)
-            ->filter(fn (array $definition): bool => ($definition['mode'] ?? null) === 'full_reconcile')
-            ->keys()->all());
         $this->assertSame('bombaCodigo', $catalog['bombas']['key']);
         $this->assertSame(BombaImporter::class, $catalog['bombas']['importer']);
         $this->assertSame('snapshot_new', $catalog['bombas']['mode']);
@@ -57,8 +49,15 @@ class WebPostoNewRecordsResourceCatalogTest extends TestCase
 
         $resources = array_keys($catalog);
         $positions = array_map(fn (string $resource): int => array_search($resource, $resources, true), [
-            'produto_lmc_lmp', 'lmcs', 'tanques', 'bombas', 'bicos',
+            'produto_lmc_lmp', 'lmcs', 'bombas', 'bicos',
         ]);
-        $this->assertSame(range($positions[0], $positions[0] + 4), $positions);
+        $this->assertSame(range($positions[0], $positions[0] + 3), $positions);
+
+        $updatedPeriodResources = collect($catalog)
+            ->filter(fn (array $definition): bool => ($definition['reconciliation_updated_period'] ?? false) === true)
+            ->keys()->sort()->values()->all();
+        $this->assertSame([
+            'caixas', 'caixas_apresentados', 'lmcs', 'titulos_pagar', 'titulos_receber',
+        ], $updatedPeriodResources);
     }
 }
