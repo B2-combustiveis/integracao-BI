@@ -68,6 +68,28 @@ services:
     deploy:
       replicas: 9
 
+  queue-chimba:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      QUEUE_CONNECTION: database
+      DB_QUEUE_RETRY_AFTER: 7600
+    command: sh -c "composer install --no-interaction && php artisan queue:work --queue=chimba-reconciliation --tries=1 --timeout=6000"
+    volumes:
+      - .:/var/www/html
+      - vendor_data:/var/www/html/vendor
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+
   scheduler:
     build:
       context: .

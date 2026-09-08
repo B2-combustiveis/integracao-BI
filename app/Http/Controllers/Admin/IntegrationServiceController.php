@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use App\Services\Integration\IntegrationRunXlsxExporter;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
@@ -162,27 +163,82 @@ class IntegrationServiceController extends Controller
             'started_at' => $run->started_at?->toIso8601String(),
             'finished_at' => $run->finished_at?->toIso8601String(),
             'error' => $run->error,
-            'companies' => $run->companyRuns->sortBy('position')->values()->map(
-                fn ($company): array => [
-                    'empresa_codigo' => $company->empresa_codigo,
-                    'empresa_nome' => $company->empresa_nome,
-                    'position' => $company->position,
-                    'status' => $company->status,
-                    'current_resource' => $company->current_resource,
-                    'current_page' => $company->current_page,
-                    'current_cursor' => $company->current_cursor,
-                    'heartbeat_at' => $company->heartbeat_at?->toIso8601String(),
-                    'received' => $company->received,
-                    'inserted' => $company->inserted,
-                    'skipped' => $company->skipped,
-                    'resource_results' => $company->resource_results ?? [],
-                    'duration_seconds' => $company->started_at
-                        ? (int) floor($company->started_at->diffInSeconds($company->finished_at ?? now())) : null,
-                    'started_at' => $company->started_at?->toIso8601String(),
-                    'finished_at' => $company->finished_at?->toIso8601String(),
-                    'error' => $company->error,
-                ],
-            )->all(),
+            'companies' => $run->companyRuns->groupBy('empresa_codigo')
+                ->map(fn ($blocks) => $this->aggregateCompanyBlocks($blocks))
+                ->sortBy('position')->values()->all(),
         ];
+    }
+
+    /**
+     * Um posto pode ter sido dividido em varios blocos de recursos (worker_blocks)
+     * para paralelizar e isolar falhas por bloco, mas a tela so deve mostrar
+     * progresso por posto, nao por bloco/tabela.
+     *
+     * @param \Illuminate\Support\Collection<int, \App\Models\IntegrationServiceCompanyRun> $blocks
+     * @return array<string, mixed>
+     */
+    private function aggregateCompanyBlocks($blocks): array
+    {
+        $first = $blocks->sortBy('position')->first();
+        $multiBlock = $blocks->count() > 1;
+        $statuses = $blocks->pluck('status');
+        $status = match (true) {
+            $statuses->contains('running') => 'running',
+            $statuses->contains('pending') => 'pending',
+            $statuses->every(fn ($s) => $s === 'failed') => 'failed',
+            $statuses->contains('failed') || $statuses->contains('partial') => 'partial',
+            default => 'success',
+        };
+        $allFinished = $blocks->every(fn ($block) => $block->finished_at !== null);
+        $startedAt = $blocks->pluck('started_at')->filter()->min();
+        $finishedAt = $allFinished ? $blocks->pluck('finished_at')->filter()->max() : null;
+        $errors = $blocks->pluck('error')->filter()->values();
+        $currentResource = $multiBlock
+            ? $this->summarizeActiveBlocks($blocks)
+            : $first->current_resource;
+
+        return [
+            'empresa_codigo' => $first->empresa_codigo,
+            'empresa_nome' => $multiBlock ? Str::beforeLast($first->empresa_nome, ' · ') : $first->empresa_nome,
+            'position' => $blocks->min('position'),
+            'status' => $status,
+            'current_resource' => $currentResource,
+            'current_page' => $multiBlock ? null : $first->current_page,
+            'current_cursor' => $multiBlock ? null : $first->current_cursor,
+            'heartbeat_at' => $blocks->pluck('heartbeat_at')->filter()->max()?->toIso8601String(),
+            'received' => $blocks->sum('received'),
+            'inserted' => $blocks->sum('inserted'),
+            'skipped' => $blocks->sum('skipped'),
+            'resource_results' => $blocks->reduce(
+                fn (array $carry, $block): array => [...$carry, ...(array) ($block->resource_results ?? [])],
+                [],
+            ),
+            'duration_seconds' => $startedAt
+                ? (int) floor($startedAt->diffInSeconds($finishedAt ?? now())) : null,
+            'started_at' => $startedAt?->toIso8601String(),
+            'finished_at' => $finishedAt?->toIso8601String(),
+            'error' => $errors->isEmpty() ? null : $errors->implode("\n"),
+        ];
+    }
+
+    /**
+     * Junta a tabela/ultimo-codigo de cada bloco em andamento numa unica string,
+     * pra nao perder a visibilidade granular so porque os blocos viraram 1 linha.
+     *
+     * @param \Illuminate\Support\Collection<int, \App\Models\IntegrationServiceCompanyRun> $blocks
+     */
+    private function summarizeActiveBlocks($blocks): ?string
+    {
+        $parts = $blocks
+            ->filter(fn ($block) => $block->status === 'running' && $block->current_resource !== null)
+            ->map(function ($block): string {
+                $marker = $block->current_cursor !== null
+                    ? ' (código '.$block->current_cursor.')'
+                    : ($block->current_page !== null ? ' (pág. '.$block->current_page.')' : '');
+
+                return $block->current_resource.$marker;
+            });
+
+        return $parts->isEmpty() ? null : $parts->implode(' · ');
     }
 }

@@ -92,8 +92,10 @@ class SyncWebPostoCompanyReconciliationTimeoutTest extends TestCase
             ['abastecimentos'],
         );
 
-        // 1.000.000 linhas / 14.000 por minuto * 60s * fator de seguranca 2 = 8.572s
-        $this->assertSame(8572, $job->timeout());
+        // 1.000.000 linhas / 14.000 por minuto * 60s * fator de seguranca 2 = 8.572s,
+        // mas o teto de 5.400s (90min) limita antes disso pra nao segurar o worker
+        // indefinidamente (o resto fica pro webposto_sync_pending_records pegar depois).
+        $this->assertSame(5400, $job->timeout());
     }
 
     public function test_no_resources_falls_back_to_the_minimum_timeout(): void

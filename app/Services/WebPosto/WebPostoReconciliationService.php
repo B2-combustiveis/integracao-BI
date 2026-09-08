@@ -101,6 +101,15 @@ class WebPostoReconciliationService
         if (($definition['reconciliation_updated_period'] ?? false) === true && $incrementalStart !== null) {
             $query['dataInicial'] = $incrementalStart;
             $query['dataFinal'] = now()->toDateString();
+        } elseif ($controlNamespace === 'webposto-chimba-reconciliation' && isset($query['dataInicial'])) {
+            // Recursos filtrados por data da transacao (nao por data de atualizacao) nao tem
+            // como saber com seguranca "o que mudou desde o ultimo sucesso" - por isso nao usam
+            // $incrementalStart. Pra Chimba, a decisao de negocio e nao reconciliar mais que os
+            // ultimos N meses de qualquer jeito, aceitando que correcao em registro mais antigo
+            // que isso nao sera capturada.
+            $months = (int) config('integration.webposto.chimba_max_lookback_months', 2);
+            $query['dataInicial'] = max($query['dataInicial'], now()->subMonths($months)->toDateString());
+            $query['dataFinal'] = now()->toDateString();
         }
         if (isset($definition['query_company_field'])) {
             $query[$definition['query_company_field']] = $empresa;
@@ -206,12 +215,24 @@ class WebPostoReconciliationService
             ->whereNotNull('finished_at')
             ->latest('finished_at')
             ->first();
+        $isChimba = $run->service?->resource === 'webposto-chimba-reconciliation';
         if ($previous === null) {
-            return null;
+            if (! $isChimba) {
+                return null;
+            }
+            $start = null;
+        } else {
+            $lookbackDays = max(1, (int) ($run->service?->lookback_days ?? 1));
+            $start = $previous->finished_at->copy()->subDays($lookbackDays);
         }
-        $lookbackDays = max(1, (int) ($run->service?->lookback_days ?? 1));
 
-        return $previous->finished_at->copy()->subDays($lookbackDays)->toDateString();
+        if ($isChimba) {
+            $months = (int) config('integration.webposto.chimba_max_lookback_months', 2);
+            $floor = now()->subMonths($months);
+            $start = $start === null ? $floor : $start->max($floor);
+        }
+
+        return $start?->toDateString();
     }
 
     /** @param array<string, mixed> $row @param array<int, string> $naturalKeys */

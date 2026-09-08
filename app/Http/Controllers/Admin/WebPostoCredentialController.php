@@ -53,6 +53,16 @@ class WebPostoCredentialController extends Controller
             return back()->with('status', 'A carga inicial desta empresa já está em andamento.');
         }
 
+        WebPostoReloadRun::query()
+            ->where('empresa_codigo', $empresa)
+            ->whereIn('status', ['queued', 'running'])
+            ->where('updated_at', '<=', now()->subHours(12))
+            ->update([
+                'status' => 'failed',
+                'finished_at' => now(),
+                'error' => 'Recarga residual encerrada automaticamente antes de uma nova tentativa de carga inicial.',
+            ]);
+
         $reloadRunning = WebPostoReloadRun::query()
             ->where('empresa_codigo', $empresa)
             ->whereIn('status', ['queued', 'running'])

@@ -212,4 +212,34 @@ class WebPostoInitialCompanySyncTest extends TestCase
             ->exists());
         Queue::assertNothingPushed();
     }
+
+    public function test_retry_closes_an_old_orphan_reload_and_queues_a_new_initial_load(): void
+    {
+        Queue::fake();
+        $reload = WebPostoReloadRun::query()->create([
+            'empresa_codigo' => 9999,
+            'resource' => 'vendas',
+            'status' => 'running',
+            'processed_tables' => [],
+            'created_at' => now()->subDay(),
+            'updated_at' => now()->subDay(),
+        ]);
+
+        try {
+            $this->withoutMiddleware()
+                ->post('/admin/credentials/9999/synchronize')
+                ->assertRedirect()
+                ->assertSessionHas('status', 'Carga inicial adicionada à fila.');
+
+            $this->assertSame('failed', $reload->fresh()->status);
+            $this->assertNotNull($reload->fresh()->finished_at);
+            $run = WebPostoInitialSyncRun::query()->where('empresa_codigo', 9999)->sole();
+            $this->assertSame('queued', $run->status);
+            Queue::assertPushed(SyncWebPostoCompanyInitialLoad::class);
+        } finally {
+            app(UniqueLock::class)->release(new SyncWebPostoCompanyInitialLoad(
+                WebPostoInitialSyncRun::query()->where('empresa_codigo', 9999)->value('id') ?? 0,
+            ));
+        }
+    }
 }

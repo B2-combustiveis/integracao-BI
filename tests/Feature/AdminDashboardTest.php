@@ -3,12 +3,16 @@
 namespace Tests\Feature;
 
 use App\Http\Middleware\EnsureAdminSession;
+use App\Models\IntegrationService;
 use App\Services\Admin\AdminOverviewService;
+use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Mockery\MockInterface;
 use Tests\TestCase;
 
 class AdminDashboardTest extends TestCase
 {
+    use DatabaseTransactions;
+
     public function test_login_screen_is_available(): void
     {
         $this->get('/admin/login')->assertOk()->assertSee('Integração BI')->assertSee('api_tokens');
@@ -57,5 +61,46 @@ class AdminDashboardTest extends TestCase
     public function test_financial_dashboard_is_not_exposed(): void
     {
         $this->withoutMiddleware(EnsureAdminSession::class)->get('/admin/financial')->assertNotFound();
+    }
+
+    public function test_services_status_groups_worker_blocks_by_posto(): void
+    {
+        $service = IntegrationService::query()->where('resource', 'webposto-chimba-reconciliation')->sole();
+        $run = $service->runs()->create([
+            'status' => 'partial',
+            'period_start' => today(),
+            'period_end' => today(),
+            'started_at' => now()->subMinutes(10),
+            'finished_at' => now(),
+        ]);
+        collect($service->settings['worker_blocks'])->values()->each(function (array $block, int $index) use ($run): void {
+            $run->companyRuns()->create([
+                'empresa_codigo' => 4604,
+                'empresa_nome' => 'POSTO CHIMBA · '.$block['name'],
+                'block_key' => 'block-'.($index + 1),
+                'position' => $index + 1,
+                'status' => $index === 1 ? 'partial' : 'success',
+                'received' => 100,
+                'inserted' => 10,
+                'skipped' => 0,
+                'resource_results' => [],
+                'error' => $index === 1 ? 'Falha de teste' : null,
+                'started_at' => now()->subMinutes(10),
+                'finished_at' => now(),
+            ]);
+        });
+
+        $response = $this->withoutMiddleware(EnsureAdminSession::class)->getJson('/admin/services/status');
+
+        $response->assertOk();
+        $serviceEntry = collect($response->json('services'))->firstWhere('id', $service->id);
+        $this->assertNotNull($serviceEntry);
+        $companies = $serviceEntry['run']['companies'];
+        $this->assertCount(1, $companies, 'os 4 blocos do mesmo posto devem virar 1 linha na tela');
+        $this->assertSame('POSTO CHIMBA', $companies[0]['empresa_nome']);
+        $this->assertSame('partial', $companies[0]['status']);
+        $this->assertSame(400, $companies[0]['received']);
+        $this->assertSame(40, $companies[0]['inserted']);
+        $this->assertSame('Falha de teste', $companies[0]['error']);
     }
 }

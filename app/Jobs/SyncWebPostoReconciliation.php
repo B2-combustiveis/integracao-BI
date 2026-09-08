@@ -15,6 +15,8 @@ class SyncWebPostoReconciliation implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
+    public const CHIMBA_QUEUE = 'chimba-reconciliation';
+
     public int $tries = 1;
 
     public int $timeout = 120;
@@ -67,6 +69,7 @@ class SyncWebPostoReconciliation implements ShouldBeUnique, ShouldQueue
             return;
         }
 
+        $queue = $service->resource === 'webposto-chimba-reconciliation' ? self::CHIMBA_QUEUE : 'default';
         $resources = (array) ($settings['resources'] ?? []);
         $configuredBlocks = collect($settings['worker_blocks'] ?? [])
             ->map(fn (array $block): array => [
@@ -100,6 +103,7 @@ class SyncWebPostoReconciliation implements ShouldBeUnique, ShouldQueue
                     $companyRun->id,
                     $service->id,
                     $block['resources'],
+                    $queue,
                 );
             }
         }

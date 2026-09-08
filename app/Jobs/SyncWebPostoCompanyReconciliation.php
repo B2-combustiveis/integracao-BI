@@ -19,6 +19,8 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
 
     private const MIN_TIMEOUT_SECONDS = 2400;
 
+    private const MAX_TIMEOUT_SECONDS = 5400;
+
     private const ROWS_PER_MINUTE_ESTIMATE = 14000;
 
     private const TIMEOUT_SAFETY_FACTOR = 2;
@@ -32,8 +34,9 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
         public readonly int $companyRunId,
         public readonly int $serviceId,
         public readonly array $resources = [],
+        string $queue = 'default',
     ) {
-        $this->onQueue('default');
+        $this->onQueue($queue);
     }
 
     public function uniqueId(): string
@@ -44,10 +47,13 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
     /**
      * Timeout proporcional ao volume ja existente localmente para os recursos deste
      * job. Postos pequenos usam o piso de 40min; postos grandes (ex: Chimba, ~10x
-     * maior que a media) ganham o tempo real que precisam. O watchdog de heartbeat
-     * (OrphanedIntegrationRunCleaner::cleanStaleCompanyRuns) ja cobre a detecao de
-     * travamento de verdade em 10min, entao esse timeout aqui e so uma rede de
-     * seguranca final para reciclar o worker.
+     * maior que a media) sao limitados ao teto de 90min em vez de rodar o tempo
+     * real que precisariam, pra nao segurar o worker indefinidamente (ja aconteceu
+     * de rodar 14h+ e travar toda a fila). O que nao couber nesse teto fica pro
+     * webposto_sync_pending_records resolver nas proximas execucoes. O watchdog de
+     * heartbeat (OrphanedIntegrationRunCleaner::cleanStaleCompanyRuns) ja cobre a
+     * detecao de travamento de verdade em 10min, entao esse timeout aqui e so uma
+     * rede de seguranca final para reciclar o worker.
      */
     public function timeout(): int
     {
@@ -73,7 +79,7 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
 
         $estimatedSeconds = (int) ceil($volume / self::ROWS_PER_MINUTE_ESTIMATE * 60 * self::TIMEOUT_SAFETY_FACTOR);
 
-        return max(self::MIN_TIMEOUT_SECONDS, $estimatedSeconds);
+        return min(self::MAX_TIMEOUT_SECONDS, max(self::MIN_TIMEOUT_SECONDS, $estimatedSeconds));
     }
 
     public function handle(WebPostoReconciliationService $synchronizer): void

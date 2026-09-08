@@ -27,7 +27,7 @@ class IntegrationServiceDispatcher
             match ($service->resource) {
                 'webposto-database-changes' => SyncWebPostoDatabase::dispatch($service->id),
                 'webposto-new-records' => SyncWebPostoNewRecords::dispatch($service->id),
-                'webposto-chimba-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id),
+                'webposto-chimba-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id)->onQueue(SyncWebPostoReconciliation::CHIMBA_QUEUE),
                 'webposto-b2-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id),
                 default => throw new \InvalidArgumentException("Recurso {$service->resource} não possui job."),
             };
