@@ -30,7 +30,8 @@ class ChimbaReconciliationServiceTest extends TestCase
         $service = IntegrationService::query()->where('resource', 'webposto-chimba-reconciliation')->sole();
 
         $this->assertSame('Reconciliação Chimba', $service->name);
-        $this->assertFalse($service->active);
+        $this->assertTrue($service->active);
+        $this->assertSame('America/Sao_Paulo', $service->settings['schedule_timezone']);
         $this->assertSame([4604], $service->settings['empresa_codigos']);
         $this->assertCount(34, $service->settings['resources']);
         $this->assertContains('tanques', $service->settings['resources']);
@@ -107,7 +108,17 @@ class ChimbaReconciliationServiceTest extends TestCase
 
     public function test_incremental_window_uses_previous_success_with_one_day_overlap(): void
     {
-        $service = IntegrationService::query()->where('resource', 'webposto-chimba-reconciliation')->sole();
+        $service = IntegrationService::query()->create([
+            'name' => 'Reconciliação Chimba teste com histórico',
+            'slug' => 'chimba-reconciliation-'.str()->uuid(),
+            'category' => 'atualizacao',
+            'resource' => 'webposto-chimba-reconciliation',
+            'empresa_codigo' => 4604,
+            'frequency_minutes' => 1440,
+            'lookback_days' => 1,
+            'active' => false,
+            'settings' => ['empresa_codigos' => [4604], 'resources' => ['vendas']],
+        ]);
         $previous = IntegrationServiceRun::query()->create([
             'integration_service_id' => $service->id,
             'status' => 'success',
@@ -210,6 +221,7 @@ class ChimbaReconciliationServiceTest extends TestCase
             $synchronizer,
             app(IntegrationRunChangeRecorder::class),
             app(WebPostoPendingRecordService::class),
+            app(\App\Services\WebPosto\WebPostoSourceDeletionService::class),
         );
 
         $reconciliation->synchronize(4604, ['vendas'], $run->id, null, 'webposto-chimba-reconciliation');
@@ -219,7 +231,7 @@ class ChimbaReconciliationServiceTest extends TestCase
         $this->assertSame(now()->toDateString(), $capturedQuery['dataFinal']);
     }
 
-    public function test_incremental_window_stays_unbounded_for_other_services_without_a_previous_success(): void
+    public function test_incremental_window_uses_two_months_for_b2_without_a_previous_success(): void
     {
         $service = IntegrationService::query()->create([
             'name' => 'Reconciliação B2 teste sem historico',
@@ -238,6 +250,9 @@ class ChimbaReconciliationServiceTest extends TestCase
         ]);
         $method = new \ReflectionMethod(WebPostoReconciliationService::class, 'incrementalStartDate');
 
-        $this->assertNull($method->invoke(app(WebPostoReconciliationService::class), $run->id));
+        $this->assertSame(
+            now()->subMonths(2)->toDateString(),
+            $method->invoke(app(WebPostoReconciliationService::class), $run->id),
+        );
     }
 }

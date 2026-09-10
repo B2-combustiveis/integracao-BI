@@ -78,22 +78,20 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
             ->where('empresa_codigo', $run->empresa_codigo)
             ->firstOrFail();
 
-        if ($credential->implantacao_status === WebPostoCredential::STATUS_SINCRONIZADO) {
-            $run->update(['status' => 'success', 'finished_at' => now()]);
-            return;
-        }
-
-        $completed = [];
+        $wasSynchronized = (bool) $run->was_synchronized
+            || $credential->implantacao_status === WebPostoCredential::STATUS_SINCRONIZADO;
+        $completed = array_values(array_unique($run->completed_resources ?? []));
         $run->update([
             'status' => 'running',
-            'current_position' => 0,
             'total_resources' => count(self::RESOURCES),
-            'completed_resources' => [],
+            'completed_resources' => $completed,
+            'was_synchronized' => $wasSynchronized,
             'started_at' => now(),
             'finished_at' => null,
             'error' => null,
         ]);
         $credential->update([
+            'implantacao_status' => WebPostoCredential::STATUS_AGUARDANDO_SINCRONIZACAO,
             'carga_inicial_iniciada_em' => now(),
             'carga_inicial_concluida_em' => null,
             'carga_inicial_erro' => null,
@@ -101,6 +99,10 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
 
         try {
             foreach (self::RESOURCES as $position => $resource) {
+                if (in_array($resource, $completed, true)) {
+                    $run->update(['current_position' => $position + 1]);
+                    continue;
+                }
                 $run->update([
                     'current_resource' => $resource,
                     'current_position' => $position + 1,
@@ -133,7 +135,9 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
                 'error' => $message,
             ]);
             $credential->update([
-                'implantacao_status' => WebPostoCredential::STATUS_AGUARDANDO_SINCRONIZACAO,
+                'implantacao_status' => $wasSynchronized
+                    ? WebPostoCredential::STATUS_SINCRONIZADO
+                    : WebPostoCredential::STATUS_AGUARDANDO_SINCRONIZACAO,
                 'carga_inicial_erro' => $message,
             ]);
             throw $exception;
@@ -149,7 +153,9 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
         $message = mb_substr($exception?->getMessage() ?? 'Falha na carga inicial.', 0, 2000);
         $run->update(['status' => 'failed', 'current_resource' => null, 'finished_at' => now(), 'error' => $message]);
         WebPostoCredential::query()->where('empresa_codigo', $run->empresa_codigo)->update([
-            'implantacao_status' => WebPostoCredential::STATUS_AGUARDANDO_SINCRONIZACAO,
+            'implantacao_status' => $run->was_synchronized
+                ? WebPostoCredential::STATUS_SINCRONIZADO
+                : WebPostoCredential::STATUS_AGUARDANDO_SINCRONIZACAO,
             'carga_inicial_erro' => $message,
         ]);
     }

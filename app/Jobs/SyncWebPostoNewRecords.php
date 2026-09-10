@@ -6,6 +6,7 @@ use App\Models\IntegrationService;
 use App\Models\IntegrationServiceCompanyRun;
 use App\Models\IntegrationServiceRun;
 use App\Models\WebPostoCredential;
+use App\Services\Integration\WebPostoReconciliationCoordinator;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -38,6 +39,10 @@ class SyncWebPostoNewRecords implements ShouldBeUnique, ShouldQueue
 
     public function handle(): void
     {
+        if (app(WebPostoReconciliationCoordinator::class)->newRecordsAreSuspended()) {
+            return;
+        }
+
         $service = IntegrationService::query()->findOrFail($this->serviceId);
         $run = IntegrationServiceRun::query()->create([
             'integration_service_id' => $service->id,
@@ -54,10 +59,12 @@ class SyncWebPostoNewRecords implements ShouldBeUnique, ShouldQueue
             ->whereIn('credentials.base', [
                 WebPostoCredential::BASE_B1,
                 WebPostoCredential::BASE_B2,
+                WebPostoCredential::BASE_CHIMBA,
             ])
             ->orderBy('credentials.empresa_codigo')
             ->get([
                 'credentials.empresa_codigo',
+                'credentials.base',
                 'empresas.fantasia',
                 'empresas.razao',
             ]);
@@ -80,9 +87,13 @@ class SyncWebPostoNewRecords implements ShouldBeUnique, ShouldQueue
                 'resource_results' => [],
             ]);
         });
+        $basesByCompanyRun = $companies->values()->pluck('base');
 
-        foreach ($companyRuns as $companyRun) {
-            SyncWebPostoCompanyNewRecords::dispatch($run->id, $companyRun->id, $service->id);
+        foreach ($companyRuns as $index => $companyRun) {
+            $queue = $basesByCompanyRun[$index] === WebPostoCredential::BASE_CHIMBA
+                ? SyncWebPostoReconciliation::CHIMBA_QUEUE
+                : 'default';
+            SyncWebPostoCompanyNewRecords::dispatch($run->id, $companyRun->id, $service->id, $queue);
         }
     }
 }

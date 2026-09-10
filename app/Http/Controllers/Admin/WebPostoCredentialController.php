@@ -41,10 +41,6 @@ class WebPostoCredentialController extends Controller
             ->where('empresa_codigo', $empresa)
             ->firstOrFail();
 
-        if ($credential->implantacao_status === WebPostoCredential::STATUS_SINCRONIZADO) {
-            return back()->with('status', 'Esta empresa já está sincronizada.');
-        }
-
         $running = WebPostoInitialSyncRun::query()
             ->where('empresa_codigo', $empresa)
             ->whereIn('status', ['queued', 'running'])
@@ -78,9 +74,12 @@ class WebPostoCredentialController extends Controller
             'status' => 'queued',
             'total_resources' => count(SyncWebPostoCompanyInitialLoad::RESOURCES),
             'completed_resources' => [],
+            'was_synchronized' => $credential->implantacao_status === WebPostoCredential::STATUS_SINCRONIZADO,
         ]);
         SyncWebPostoCompanyInitialLoad::dispatch($run->id);
 
-        return back()->with('status', 'Carga inicial adicionada à fila.');
+        return back()->with('status', $run->was_synchronized
+            ? 'Ressincronização completa adicionada à fila.'
+            : 'Carga inicial adicionada à fila.');
     }
 }

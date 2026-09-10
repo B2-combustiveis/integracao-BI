@@ -30,8 +30,11 @@ class IntegrationServiceController extends Controller
 
     public function run(IntegrationService $service, IntegrationServiceDispatcher $dispatcher): RedirectResponse
     {
-        $dispatcher->dispatch($service->id);
-        return back()->with('status', 'Execucao manual adicionada a fila.');
+        $dispatched = $dispatcher->dispatch($service->id);
+
+        return back()->with('status', $dispatched
+            ? 'Execucao manual adicionada a fila.'
+            : 'Execucao solicitada e aguardando a rotina atual liberar os workers.');
     }
 
     public function status(): JsonResponse

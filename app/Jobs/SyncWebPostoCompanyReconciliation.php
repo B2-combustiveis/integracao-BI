@@ -5,6 +5,8 @@ namespace App\Jobs;
 use App\Models\IntegrationService;
 use App\Models\IntegrationServiceCompanyRun;
 use App\Models\IntegrationServiceRun;
+use App\Services\Integration\WebPostoReconciliationCoordinator;
+use App\Services\Integration\IntegrationServiceSchedule;
 use App\Services\WebPosto\WebPostoNewRecordsResourceCatalog;
 use App\Services\WebPosto\WebPostoReconciliationService;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -35,6 +37,7 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
         public readonly int $serviceId,
         public readonly array $resources = [],
         string $queue = 'default',
+        public readonly array $sharedCompanyCodes = [],
     ) {
         $this->onQueue($queue);
     }
@@ -91,29 +94,40 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
         $companyRun->update(['status' => 'running', 'started_at' => now(), 'error' => null]);
 
         try {
-            $results = $synchronizer->synchronize(
-                (int) $companyRun->empresa_codigo,
-                $this->resources !== [] ? $this->resources : ($service->settings['resources'] ?? []),
-                $this->runId,
-                function (string $state, string $resource, ?array $result) use ($companyRun, &$totals, &$resourceResults): void {
-                    if (in_array($state, ['completed', 'failed'], true) && $result !== null) {
-                        $resourceResults[$resource] = $result;
-                        foreach ($totals as $field => $value) {
-                            $totals[$field] += (int) ($result[$field] ?? 0);
-                        }
+            $progress = function (string $state, string $resource, ?array $result) use ($companyRun, &$totals, &$resourceResults): void {
+                if (in_array($state, ['completed', 'failed'], true) && $result !== null) {
+                    $resourceResults[$resource] = $result;
+                    foreach ($totals as $field => $value) {
+                        $totals[$field] += (int) ($result[$field] ?? 0);
                     }
-                    $progress = $state === 'progress' && $result !== null
-                        ? ['current_page' => (int) ($result['page'] ?? 0), 'current_cursor' => isset($result['cursor']) ? (int) $result['cursor'] : null, 'heartbeat_at' => $result['heartbeat_at'] ?? now()]
-                        : ['current_page' => null, 'current_cursor' => null, 'heartbeat_at' => $state === 'running' ? now() : null];
-                    $companyRun->update([
-                        'current_resource' => in_array($state, ['running', 'progress'], true) ? $resource : null,
-                        ...$progress,
-                        ...$totals,
-                        'resource_results' => $resourceResults,
-                    ]);
-                },
-                $service->resource,
-            );
+                }
+                $pageProgress = $state === 'progress' && $result !== null
+                    ? ['current_page' => (int) ($result['page'] ?? 0), 'current_cursor' => isset($result['cursor']) ? (int) $result['cursor'] : null, 'heartbeat_at' => $result['heartbeat_at'] ?? now()]
+                    : ['current_page' => null, 'current_cursor' => null, 'heartbeat_at' => $state === 'running' ? now() : null];
+                $companyRun->update([
+                    'current_resource' => in_array($state, ['running', 'progress'], true) ? $resource : null,
+                    ...$pageProgress,
+                    ...$totals,
+                    'resource_results' => $resourceResults,
+                ]);
+            };
+            $selectedResources = $this->resources !== [] ? $this->resources : ($service->settings['resources'] ?? []);
+            $results = $this->sharedCompanyCodes !== []
+                ? $synchronizer->synchronizeShared(
+                    (int) $companyRun->empresa_codigo,
+                    $this->sharedCompanyCodes,
+                    $selectedResources,
+                    $this->runId,
+                    $progress,
+                    $service->resource,
+                )
+                : $synchronizer->synchronize(
+                    (int) $companyRun->empresa_codigo,
+                    $selectedResources,
+                    $this->runId,
+                    $progress,
+                    $service->resource,
+                );
             $totals = collect($results)->reduce(function (array $carry, array $result): array {
                 foreach (array_keys($carry) as $field) {
                     $carry[$field] += (int) ($result[$field] ?? 0);
@@ -196,8 +210,9 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
         $service = IntegrationService::query()->find($this->serviceId);
         $service?->update([
             'last_completed_at' => now(),
-            'next_run_at' => $service->active ? now()->addMinutes($service->frequency_minutes) : null,
+            'next_run_at' => $service->active ? app(IntegrationServiceSchedule::class)->nextRunAt($service) : null,
             'last_error' => $error,
         ]);
+        app(WebPostoReconciliationCoordinator::class)->resumeNewRecordsIfNoReconciliationRunning($service?->resource);
     }
 }

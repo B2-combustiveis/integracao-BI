@@ -93,9 +93,13 @@ class OrphanedIntegrationRunCleaner
         $service = $run !== null ? IntegrationService::query()->find($run->integration_service_id) : null;
         $service?->update([
             'last_completed_at' => now(),
-            'next_run_at' => $service->active ? now()->addMinutes($service->frequency_minutes) : null,
+            'next_run_at' => $service->active ? app(IntegrationServiceSchedule::class)->nextRunAt($service) : null,
             'last_error' => $error,
         ]);
+        $coordinator = app(WebPostoReconciliationCoordinator::class);
+        if ($coordinator->isReconciliationResource($service?->resource)) {
+            $coordinator->resumeNewRecordsIfNoReconciliationRunning($service?->resource);
+        }
     }
     public function clean(int $staleMinutes = 10): int
     {
@@ -108,8 +112,13 @@ class OrphanedIntegrationRunCleaner
             ->where('updated_at', '<=', now()->subMinutes(max(1, $staleMinutes)))
             ->get();
         $cleaned = 0;
+        $coordinator = app(WebPostoReconciliationCoordinator::class);
+        $affectedReconciliation = false;
 
         foreach ($runs as $run) {
+            if ($coordinator->isReconciliationResource($run->service?->resource)) {
+                $affectedReconciliation = true;
+            }
             DB::transaction(function () use ($run, &$cleaned): void {
                 $locked = IntegrationServiceRun::query()->lockForUpdate()->find($run->id);
                 if (! $locked || $locked->status !== 'running' || DB::table('jobs')->exists()) {
@@ -157,6 +166,10 @@ class OrphanedIntegrationRunCleaner
                     });
                 $cleaned++;
             });
+        }
+
+        if ($affectedReconciliation) {
+            $coordinator->resumeNewRecordsIfNoReconciliationRunning();
         }
 
         $orphanEndpoints = WebPostoSyncEndpointRun::query()

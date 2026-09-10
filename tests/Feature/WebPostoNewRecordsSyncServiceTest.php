@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\SyncWebPostoCompanyNewRecords;
 use App\Jobs\SyncWebPostoNewRecords;
+use App\Jobs\SyncWebPostoReconciliation;
 use App\Models\IntegrationService;
 use App\Models\IntegrationServiceRun;
 use App\Models\WebPostoSyncControl;
@@ -397,14 +398,14 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
         );
     }
 
-    public function test_new_records_excludes_chimba_from_the_eligible_companies(): void
+    public function test_new_records_includes_chimba_and_routes_it_to_the_chimba_queue(): void
     {
         DB::connection('webposto')->table('webposto_credentials')
             ->where('empresa_codigo', 4604)
             ->update(['base' => 'chimba']);
         $service = IntegrationService::query()->create([
-            'name' => 'Exclude Chimba from new records test',
-            'slug' => 'exclude-chimba-new-records-'.str()->uuid(),
+            'name' => 'Include Chimba in new records test',
+            'slug' => 'include-chimba-new-records-'.str()->uuid(),
             'category' => 'cadastros',
             'resource' => 'webposto-new-records',
             'empresa_codigo' => 4604,
@@ -416,14 +417,16 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
         Queue::fake([SyncWebPostoCompanyNewRecords::class]);
         (new SyncWebPostoNewRecords($service->id))->handle();
 
-        Queue::assertNothingPushed();
+        Queue::assertPushed(SyncWebPostoCompanyNewRecords::class, function (SyncWebPostoCompanyNewRecords $job): bool {
+            return $job->queue === SyncWebPostoReconciliation::CHIMBA_QUEUE;
+        });
         $run = IntegrationServiceRun::query()
             ->where('integration_service_id', $service->id)
             ->latest('id')
             ->firstOrFail();
-        $this->assertSame('failed', $run->status);
-        $this->assertSame('Nenhum posto sincronizado e ativo foi encontrado.', $run->error);
-        $this->assertCount(0, $run->companyRuns);
+        $this->assertSame('running', $run->status);
+        $this->assertCount(1, $run->companyRuns);
+        $this->assertSame(4604, $run->companyRuns->first()->empresa_codigo);
     }
 
     public function test_emp_ignores_a_company_that_is_still_awaiting_initial_load(): void

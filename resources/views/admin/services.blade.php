@@ -133,7 +133,10 @@
                 @php
                     $lastRun = $service->runs->first();
                     $frequency = (int) $service->frequency_minutes;
-                    if ($frequency > 0 && $frequency % 1440 === 0) {
+                    $dailyAt = $service->settings['daily_at'] ?? null;
+                    if ($dailyAt) {
+                        $scheduleLabel = 'Todos os dias às '.$dailyAt;
+                    } elseif ($frequency > 0 && $frequency % 1440 === 0) {
                         $amount = intdiv($frequency, 1440);
                         $scheduleLabel = 'A cada '.$amount.' '.($amount === 1 ? 'dia' : 'dias');
                     } elseif ($frequency > 0 && $frequency % 60 === 0) {
@@ -153,7 +156,7 @@
                         @else<form method="POST" action="{{ route('admin.services.resume', $service) }}">@csrf<button class="action" type="submit">Ativar</button></form>@endif
                         <button class="toggle" type="button" data-detail="service-{{ $service->id }}" title="Ver detalhes" aria-label="Ver detalhes"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></td></tr>
                 <tr class="detail-row"><td colspan="5"><div class="detail" id="service-{{ $service->id }}"><div class="detail-content">
-                    <div class="next-action"><div class="facts"><div class="fact"><span>Próximo acionamento</span><strong>{{ $service->active ? (optional($service->next_run_at)->timezone(config('app.display_timezone'))->format('d/m/Y H:i:s') ?: 'Aguardando acionamento') : 'Somente manual' }}</strong></div></div></div>
+                    <div class="next-action"><div class="facts"><div class="fact"><span>Próximo acionamento</span><strong data-role="next-run">{{ $service->active ? (optional($service->next_run_at)->timezone(config('app.display_timezone'))->format('d/m/Y H:i:s') ?: 'Aguardando acionamento') : 'Somente manual' }}</strong></div></div></div>
                     <div class="fields"><div class="history-head"><h3>Relatórios por execução</h3><form method="POST" action="{{ route('admin.services.runs.clear', $service) }}" data-clear-reports data-service-name="{{ $service->name }}">@csrf<button class="action confirm-danger" type="submit">Limpar relatórios</button></form></div><div class="history">@forelse($service->runs as $run)<div class="history-row"><strong class="history-run"><span>#{{ $run->id }}</span><span class="run-status {{ $run->status }}">{{ $run->status === 'success' ? 'Concluída' : ($run->status === 'partial' ? 'Com ressalvas' : ($run->status === 'failed' ? 'Falhou' : 'Executando')) }}</span></strong><span class="history-meta">{{ optional($run->started_at)->timezone(config('app.display_timezone'))->format('d/m/Y H:i:s') }}@if($service->resource === 'webposto-new-records') @forelse($run->new_records_by_resource as $resource => $total) &middot; {{ $resource }}: {{ $total }} novos @empty &middot; Nenhuma inserção nova @endforelse &middot; {{ $run->updated }} atualizados @else &middot; {{ $run->inserted }} novos &middot; {{ $run->updated }} atualizados &middot; {{ $run->changes_count }} detalhados @endif</span><span>{{ $run->started_at ? $run->started_at->diffForHumans($run->finished_at, true) : '—' }}</span><a class="export" href="{{ route('admin.services.runs.export', [$service, $run]) }}">Exportar Excel</a></div>@empty<div style="padding:14px;color:var(--oktane-muted);font-size:11px">Nenhuma execução registrada.</div>@endforelse</div></div>
                 </div></div></td></tr>
             @empty
@@ -199,6 +202,7 @@ async function refreshServices(){
   data.services.forEach(service=>{
    const row=document.querySelector('[data-service-id="'+service.id+'"]');if(!row)return;
    const badge=row.querySelector('[data-role=service-status]');badge.textContent=service.active?'Ativo':'Pausado';badge.classList.toggle('off',!service.active);
+   const nextRun=document.querySelector('#service-'+service.id+' [data-role=next-run]');if(nextRun)nextRun.textContent=service.active?(service.next_run_at?localDate(service.next_run_at):'Aguardando acionamento'):'Somente manual';
    const target=row.querySelector('[data-role=run-progress]'),run=service.run;
    if(!run){target.innerHTML='<span class="muted">Nunca executado</span>';return}
    target.innerHTML='<strong>'+localDate(run.started_at)+'</strong>';

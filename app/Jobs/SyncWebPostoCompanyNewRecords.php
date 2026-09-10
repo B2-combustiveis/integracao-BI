@@ -25,8 +25,9 @@ class SyncWebPostoCompanyNewRecords implements ShouldBeUnique, ShouldQueue
         public readonly int $runId,
         public readonly int $companyRunId,
         public readonly int $serviceId,
+        string $queue = 'default',
     ) {
-        $this->onQueue('default');
+        $this->onQueue($queue);
     }
 
     public function uniqueId(): string

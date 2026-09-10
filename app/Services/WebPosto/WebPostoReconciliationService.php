@@ -15,6 +15,7 @@ class WebPostoReconciliationService
         private readonly WebPostoCursorSynchronizer $synchronizer,
         private readonly IntegrationRunChangeRecorder $changeRecorder,
         private readonly WebPostoPendingRecordService $pendingRecords,
+        private readonly WebPostoSourceDeletionService $sourceDeletions,
     ) {}
 
     /** @param array<int, string> $resources @return array<string, array<string, mixed>> */
@@ -46,7 +47,7 @@ class WebPostoReconciliationService
             } catch (Throwable $exception) {
                 $results[$resource] = [
                     'status' => 'failed',
-                    'error' => mb_substr($exception->getMessage(), 0, 2000),
+                    'error' => $this->safeError($exception),
                     'received' => 0,
                     'inserted' => 0,
                     'updated' => 0,
@@ -62,6 +63,83 @@ class WebPostoReconciliationService
         $this->retryPendingUntilStable($empresa, $resources, $runId, $results);
 
         return $results;
+    }
+
+    /**
+     * Reconciles endpoints whose cursor is global to the credential only once,
+     * then routes every row to its company using the source empresaCodigo.
+     *
+     * @param array<int, int> $companyCodes
+     * @param array<int, string> $resources
+     * @return array<string, array<string, mixed>>
+     */
+    public function synchronizeShared(
+        int $credentialCompany,
+        array $companyCodes,
+        array $resources,
+        int $runId,
+        ?callable $onProgress = null,
+        string $controlNamespace = 'reconciliation',
+    ): array {
+        $allowedCompanies = array_values(array_unique(array_map('intval', $companyCodes)));
+        $results = [];
+        $incrementalStart = $this->incrementalStartDate($runId);
+        $base = WebPostoCredential::query()->where('empresa_codigo', $credentialCompany)->value('base');
+
+        foreach (array_values(array_unique($resources)) as $resource) {
+            $definition = $this->catalog->get($resource, $base);
+            if ($onProgress !== null) {
+                $onProgress('running', $resource, null);
+            }
+
+            try {
+                $retried = ['received' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0];
+                foreach ($allowedCompanies as $empresa) {
+                    $companyRetry = $this->pendingRecords->retry($definition, $empresa, $runId, $resource);
+                    foreach (array_keys($retried) as $field) {
+                        $retried[$field] += (int) ($companyRetry[$field] ?? 0);
+                    }
+                    $this->recordProgress($runId, $companyRetry);
+                }
+                $reconciled = $this->reconcileResource(
+                    $definition,
+                    $credentialCompany,
+                    $runId,
+                    $resource,
+                    $onProgress,
+                    $incrementalStart,
+                    $controlNamespace.':shared',
+                    $allowedCompanies,
+                );
+                $results[$resource] = $this->mergeResults($retried, $reconciled) + ['status' => 'success'];
+                if ($onProgress !== null) {
+                    $onProgress('completed', $resource, $results[$resource]);
+                }
+            } catch (Throwable $exception) {
+                $results[$resource] = [
+                    'status' => 'failed', 'error' => $this->safeError($exception),
+                    'received' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0,
+                ];
+                if ($onProgress !== null) {
+                    $onProgress('failed', $resource, $results[$resource]);
+                }
+            }
+        }
+
+        foreach ($allowedCompanies as $empresa) {
+            $this->retryPendingUntilStable($empresa, $resources, $runId, $results);
+        }
+
+        return $results;
+    }
+
+    private function safeError(Throwable $exception): string
+    {
+        return mb_substr(
+            (string) preg_replace('/([?&]chave=)[^&\s]+/i', '$1SEU_TOKEN_AQUI', $exception->getMessage()),
+            0,
+            2000,
+        );
     }
 
     /** @param array<int, string> $resources @param array<string, array<string, mixed>> $results */
@@ -95,33 +173,94 @@ class WebPostoReconciliationService
         ?callable $onProgress,
         ?string $incrementalStart,
         string $controlNamespace,
+        ?array $allowedCompanies = null,
     ): array
     {
         $query = $definition['query'];
         if (($definition['reconciliation_updated_period'] ?? false) === true && $incrementalStart !== null) {
             $query['dataInicial'] = $incrementalStart;
             $query['dataFinal'] = now()->toDateString();
-        } elseif ($controlNamespace === 'webposto-chimba-reconciliation' && isset($query['dataInicial'])) {
+        } elseif ($this->usesLimitedReconciliationWindow($controlNamespace) && isset($query['dataInicial'])) {
             // Recursos filtrados por data da transacao (nao por data de atualizacao) nao tem
             // como saber com seguranca "o que mudou desde o ultimo sucesso" - por isso nao usam
             // $incrementalStart. Pra Chimba, a decisao de negocio e nao reconciliar mais que os
             // ultimos N meses de qualquer jeito, aceitando que correcao em registro mais antigo
             // que isso nao sera capturada.
-            $months = (int) config('integration.webposto.chimba_max_lookback_months', 2);
+            $months = (int) config('integration.webposto.reconciliation_max_lookback_months', 2);
             $query['dataInicial'] = max($query['dataInicial'], now()->subMonths($months)->toDateString());
             $query['dataFinal'] = now()->toDateString();
         }
-        if (isset($definition['query_company_field'])) {
+        if ($allowedCompanies === null && isset($definition['query_company_field'])) {
             $query[$definition['query_company_field']] = $empresa;
         }
         if (! ($definition['cursor']['direct_list'] ?? false)) {
             $query['limite'] = (int) ($definition['limit'] ?? $query['limite'] ?? 1000);
         }
 
+        $cursorInitialValue = $this->reconciliationCursorInitialValue(
+            $definition,
+            $empresa,
+            $query,
+            $controlNamespace,
+            $allowedCompanies,
+        );
+
+        $seenByCompany = [];
         $result = $this->synchronizer->synchronize(
             endpoint: $definition['endpoint'],
             empresaCodigo: $empresa,
-            persist: function (mixed $payload, array $parameters) use ($definition, $empresa, $runId, $resource): array {
+            persist: function (mixed $payload, array $parameters) use ($definition, $empresa, $runId, $resource, $allowedCompanies, &$seenByCompany): array {
+                $this->rememberSeenRows($payload, $definition, $empresa, $allowedCompanies, $seenByCompany);
+                if ($allowedCompanies === null) {
+                    return $this->persistCompanyPage($payload, $parameters, $definition, $empresa, $runId, $resource, false);
+                }
+
+                $companyField = $definition['company_field'] ?? 'empresaCodigo';
+                $rows = $this->sharedRowsByCompany($payload, $companyField, $allowedCompanies);
+                $totals = ['received' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0];
+                foreach ($rows as $companyCode => $companyRows) {
+                    $companyPayload = is_array($payload)
+                        ? [...$payload, 'resultados' => $companyRows->values()->all()]
+                        : ['resultados' => $companyRows->values()->all()];
+                    $stored = $this->persistCompanyPage($companyPayload, $parameters, $definition, (int) $companyCode, $runId, $resource, true);
+                    foreach (array_keys($totals) as $field) {
+                        $totals[$field] += (int) ($stored[$field] ?? 0);
+                    }
+                }
+
+                return $totals;
+            },
+            query: $query,
+            cursor: [
+                'initial_value' => $cursorInitialValue,
+                'prefer_initial_value' => true,
+                ...($definition['cursor'] ?? []),
+            ],
+            integrationServiceRunId: $runId,
+            controlKey: $definition['endpoint'].':'.$controlNamespace,
+            resumeFromCheckpoint: true,
+            onPageProgress: $onProgress === null ? null : fn (array $progress) => $onProgress('progress', $resource, $progress),
+        );
+        $deletions = $this->sourceDeletions->confirm(
+            $definition,
+            $resource,
+            $seenByCompany,
+            $allowedCompanies ?? [$empresa],
+            $query,
+            $runId,
+        );
+
+        return [
+            ...$result,
+            ...$deletions,
+            'period_start' => ($definition['reconciliation_updated_period'] ?? false) === true ? $incrementalStart : null,
+            'period_end' => ($definition['reconciliation_updated_period'] ?? false) === true ? now()->toDateString() : null,
+        ];
+    }
+
+    /** @param array<string, mixed> $definition @return array<string, int> */
+    private function persistCompanyPage(mixed $payload, array $parameters, array $definition, int $empresa, int $runId, string $resource, bool $requireCompany): array
+    {
                 $companyField = $definition['company_field'] ?? 'empresaCodigo';
                 $key = $definition['key'];
                 $naturalKeys = $definition['natural_keys'] ?? [$key];
@@ -129,6 +268,7 @@ class WebPostoReconciliationService
                 $rows = collect(is_array($payload) && is_array($payload['resultados'] ?? null) ? $payload['resultados'] : [])
                     ->filter(fn ($row): bool => is_array($row)
                         && collect($naturalKeys)->every(fn (string $field): bool => array_key_exists($field, $row))
+                        && (! $companyScoped || ($requireCompany ? isset($row[$companyField]) : true))
                         && (! $companyScoped || ! isset($row[$companyField]) || (int) $row[$companyField] === $empresa))
                     ->map(fn (array $row): array => $companyScoped && ! isset($row[$companyField]) ? [$companyField => $empresa, ...$row] : $row)
                     ->unique(fn (array $row): string => $this->naturalKeySignature($row, $naturalKeys))
@@ -186,20 +326,93 @@ class WebPostoReconciliationService
                 $this->recordProgress($runId, $stored);
 
                 return $stored;
-            },
-            query: $query,
-            cursor: ['initial_value' => 1, 'prefer_initial_value' => true, ...($definition['cursor'] ?? [])],
-            integrationServiceRunId: $runId,
-            controlKey: $definition['endpoint'].':'.$controlNamespace,
-            resumeFromCheckpoint: true,
-            onPageProgress: $onProgress === null ? null : fn (array $progress) => $onProgress('progress', $resource, $progress),
-        );
+    }
 
-        return [
-            ...$result,
-            'period_start' => ($definition['reconciliation_updated_period'] ?? false) === true ? $incrementalStart : null,
-            'period_end' => ($definition['reconciliation_updated_period'] ?? false) === true ? now()->toDateString() : null,
-        ];
+    /** @param array<int, int> $allowedCompanies */
+    private function sharedRowsByCompany(mixed $payload, string $companyField, array $allowedCompanies): \Illuminate\Support\Collection
+    {
+        return collect(is_array($payload) && is_array($payload['resultados'] ?? null) ? $payload['resultados'] : [])
+            ->filter(fn ($row): bool => is_array($row)
+                && isset($row[$companyField])
+                && in_array((int) $row[$companyField], $allowedCompanies, true))
+            ->groupBy(fn (array $row): int => (int) $row[$companyField]);
+    }
+
+    /**
+     * @param array<string, mixed> $definition
+     * @param array<int, int>|null $allowedCompanies
+     * @param array<int, array<string, true>> $seenByCompany
+     */
+    private function rememberSeenRows(mixed $payload, array $definition, int $fallbackCompany, ?array $allowedCompanies, array &$seenByCompany): void
+    {
+        $companyField = (string) ($definition['company_field'] ?? 'empresaCodigo');
+        $naturalKeys = (array) ($definition['natural_keys'] ?? [$definition['key']]);
+        foreach (is_array($payload) && is_array($payload['resultados'] ?? null) ? $payload['resultados'] : [] as $row) {
+            if (! is_array($row) || ! collect($naturalKeys)->every(fn (string $field): bool => array_key_exists($field, $row))) {
+                continue;
+            }
+            $company = isset($row[$companyField]) ? (int) $row[$companyField] : $fallbackCompany;
+            if ($allowedCompanies !== null && ! in_array($company, $allowedCompanies, true)) {
+                continue;
+            }
+            if ($allowedCompanies !== null && ! isset($row[$companyField])) {
+                continue;
+            }
+            $key = collect($naturalKeys)->mapWithKeys(fn (string $field): array => [$field => $row[$field]])->all();
+            ksort($key);
+            $seenByCompany[$company][hash('sha256', json_encode($key, JSON_UNESCAPED_UNICODE))] = true;
+        }
+    }
+
+    /**
+     * Endpoints por cursor usam codigos globais e podem gastar centenas de
+     * requisicoes atravessando codigos anteriores a janela reconciliada. Quando
+     * ja existe um espelho local da empresa, iniciar imediatamente antes do menor
+     * codigo da janela preserva a leitura completa do periodo sem esse vazio.
+     *
+     * A carga inicial e Novos Dados nao passam por este servico. Se a tabela nao
+     * possuir uma referencia local confiavel, mantemos o comportamento seguro de
+     * iniciar em 1.
+     *
+     * @param array<string, mixed> $definition
+     * @param array<string, mixed> $query
+     */
+    private function reconciliationCursorInitialValue(
+        array $definition,
+        int $empresa,
+        array $query,
+        string $controlNamespace,
+        ?array $allowedCompanies = null,
+    ): int {
+        if (! $this->usesLimitedReconciliationWindow($controlNamespace)
+            || ! isset($query['dataInicial'])
+            || ($definition['cursor']['direct_list'] ?? false)
+            || ($definition['cursor']['single_page'] ?? false)) {
+            return 1;
+        }
+
+        $key = (string) ($definition['key'] ?? '');
+        $dateField = (string) ($definition['updated_field'] ?? '');
+        if ($key === '' || $dateField === '') {
+            return 1;
+        }
+
+        try {
+            $local = DB::connection('webposto')
+                ->table($definition['table'])
+                ->where($dateField, '>=', $query['dataInicial']);
+            if (($definition['company_scoped'] ?? true) === true && $allowedCompanies !== null) {
+                $local->whereIn($definition['company_field'] ?? 'empresaCodigo', $allowedCompanies);
+            } elseif (($definition['company_scoped'] ?? true) === true) {
+                $local->where($definition['company_field'] ?? 'empresaCodigo', $empresa);
+            }
+
+            $minimum = $local->min($key);
+        } catch (Throwable) {
+            return 1;
+        }
+
+        return is_numeric($minimum) ? max(1, (int) $minimum - 1) : 1;
     }
 
     private function incrementalStartDate(int $runId): ?string
@@ -215,9 +428,9 @@ class WebPostoReconciliationService
             ->whereNotNull('finished_at')
             ->latest('finished_at')
             ->first();
-        $isChimba = $run->service?->resource === 'webposto-chimba-reconciliation';
+        $isReconciliation = $this->usesLimitedReconciliationWindow((string) $run->service?->resource);
         if ($previous === null) {
-            if (! $isChimba) {
+            if (! $isReconciliation) {
                 return null;
             }
             $start = null;
@@ -226,13 +439,19 @@ class WebPostoReconciliationService
             $start = $previous->finished_at->copy()->subDays($lookbackDays);
         }
 
-        if ($isChimba) {
-            $months = (int) config('integration.webposto.chimba_max_lookback_months', 2);
+        if ($isReconciliation) {
+            $months = (int) config('integration.webposto.reconciliation_max_lookback_months', 2);
             $floor = now()->subMonths($months);
             $start = $start === null ? $floor : $start->max($floor);
         }
 
         return $start?->toDateString();
+    }
+
+    private function usesLimitedReconciliationWindow(string $resource): bool
+    {
+        return str_starts_with($resource, 'webposto-chimba-reconciliation')
+            || str_starts_with($resource, 'webposto-b2-reconciliation');
     }
 
     /** @param array<string, mixed> $row @param array<int, string> $naturalKeys */

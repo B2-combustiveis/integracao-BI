@@ -14,6 +14,7 @@ class WebPostoInitialSyncRun extends Model
     {
         return [
             'completed_resources' => 'array',
+            'was_synchronized' => 'boolean',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
         ];

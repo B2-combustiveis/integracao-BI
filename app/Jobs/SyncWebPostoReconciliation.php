@@ -6,16 +6,20 @@ use App\Models\IntegrationService;
 use App\Models\IntegrationServiceCompanyRun;
 use App\Models\IntegrationServiceRun;
 use App\Models\WebPostoCredential;
+use App\Services\Integration\WebPostoReconciliationCoordinator;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 class SyncWebPostoReconciliation implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
     public const CHIMBA_QUEUE = 'chimba-reconciliation';
+
+    private const B2_SHARED_RESOURCES = ['cliente_empresas', 'abastecimentos'];
 
     public int $tries = 1;
 
@@ -65,16 +69,25 @@ class SyncWebPostoReconciliation implements ShouldBeUnique, ShouldQueue
             $message = 'Nenhum posto sincronizado e ativo foi encontrado para esta reconciliação.';
             $run->update(['status' => 'failed', 'error' => $message, 'finished_at' => now()]);
             $service->update(['last_error' => $message]);
+            app(WebPostoReconciliationCoordinator::class)->resumeNewRecordsIfNoReconciliationRunning($service->resource);
 
             return;
         }
 
+        app(WebPostoReconciliationCoordinator::class)->pauseNewRecordsForReconciliation($service->resource);
+
         $queue = $service->resource === 'webposto-chimba-reconciliation' ? self::CHIMBA_QUEUE : 'default';
         $resources = (array) ($settings['resources'] ?? []);
+        $sharedResources = $service->resource === 'webposto-b2-reconciliation'
+            ? array_values(array_intersect(self::B2_SHARED_RESOURCES, $resources))
+            : [];
         $configuredBlocks = collect($settings['worker_blocks'] ?? [])
             ->map(fn (array $block): array => [
                 'name' => (string) ($block['name'] ?? 'Bloco'),
-                'resources' => array_values(array_intersect($resources, (array) ($block['resources'] ?? []))),
+                'resources' => array_values(array_diff(
+                    array_intersect($resources, (array) ($block['resources'] ?? [])),
+                    $sharedResources,
+                )),
             ])
             ->filter(fn (array $block): bool => $block['resources'] !== [])
             ->values();
@@ -107,5 +120,37 @@ class SyncWebPostoReconciliation implements ShouldBeUnique, ShouldQueue
                 );
             }
         }
+
+        if ($sharedResources !== []) {
+            $companyCodes = $companies->pluck('empresa_codigo')->map(fn ($code): int => (int) $code)->all();
+            $credentialCompany = (int) $companyCodes[0];
+            foreach ($sharedResources as $resource) {
+                $companyRun = IntegrationServiceCompanyRun::query()->create([
+                    'integration_service_run_id' => $run->id,
+                    'empresa_codigo' => $credentialCompany,
+                    'empresa_nome' => 'B2 · '.str_replace('_', ' ', $resource).' (compartilhado)',
+                    'block_key' => 'shared-'.substr($resource, 0, 30),
+                    'position' => ++$position,
+                    'status' => 'pending',
+                    'resource_results' => [],
+                ]);
+
+                SyncWebPostoCompanyReconciliation::dispatch(
+                    $run->id,
+                    $companyRun->id,
+                    $service->id,
+                    [$resource],
+                    $queue,
+                    $companyCodes,
+                );
+            }
+        }
+    }
+
+    public function failed(Throwable $exception): void
+    {
+        $service = IntegrationService::query()->find($this->serviceId);
+        app(WebPostoReconciliationCoordinator::class)
+            ->resumeNewRecordsIfNoReconciliationRunning($service?->resource);
     }
 }

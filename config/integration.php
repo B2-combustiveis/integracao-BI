@@ -8,5 +8,6 @@ return [
         'retry_delays_ms' => [500, 1500, 3000],
         'recent_base_initial_date' => env('WEBPOSTO_RECENT_BASE_INITIAL_DATE', '2024-01-01'),
         'chimba_max_lookback_months' => (int) env('WEBPOSTO_CHIMBA_MAX_LOOKBACK_MONTHS', 2),
+        'reconciliation_max_lookback_months' => (int) env('WEBPOSTO_RECONCILIATION_MAX_LOOKBACK_MONTHS', 2),
     ],
 ];

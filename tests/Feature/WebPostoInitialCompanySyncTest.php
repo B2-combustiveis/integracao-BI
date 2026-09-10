@@ -87,6 +87,30 @@ class WebPostoInitialCompanySyncTest extends TestCase
         }
     }
 
+    public function test_admin_can_queue_a_complete_resynchronization_for_a_synchronized_company(): void
+    {
+        Queue::fake();
+        WebPostoCredential::query()->where('empresa_codigo', 9999)->update([
+            'implantacao_status' => WebPostoCredential::STATUS_SINCRONIZADO,
+        ]);
+
+        try {
+            $this->withoutMiddleware()
+                ->post('/admin/credentials/9999/synchronize')
+                ->assertRedirect()
+                ->assertSessionHas('status', 'Ressincronização completa adicionada à fila.');
+
+            $run = WebPostoInitialSyncRun::query()->where('empresa_codigo', 9999)->sole();
+            $this->assertTrue($run->was_synchronized);
+            $this->assertSame('queued', $run->status);
+            Queue::assertPushed(SyncWebPostoCompanyInitialLoad::class);
+        } finally {
+            app(UniqueLock::class)->release(new SyncWebPostoCompanyInitialLoad(
+                WebPostoInitialSyncRun::query()->where('empresa_codigo', 9999)->value('id') ?? 0,
+            ));
+        }
+    }
+
     public function test_initial_load_runs_every_stage_in_order_and_only_then_releases_company(): void
     {
         $run = WebPostoInitialSyncRun::query()->create([
@@ -147,6 +171,59 @@ class WebPostoInitialCompanySyncTest extends TestCase
         $credential = WebPostoCredential::query()->where('empresa_codigo', 9999)->sole();
         $this->assertSame(WebPostoCredential::STATUS_AGUARDANDO_SINCRONIZACAO, $credential->implantacao_status);
         $this->assertSame('API indisponível', $credential->carga_inicial_erro);
+    }
+
+    public function test_failed_resynchronization_preserves_the_previous_synchronized_status(): void
+    {
+        WebPostoCredential::query()->where('empresa_codigo', 9999)->update([
+            'implantacao_status' => WebPostoCredential::STATUS_SINCRONIZADO,
+        ]);
+        $run = WebPostoInitialSyncRun::query()->create([
+            'empresa_codigo' => 9999,
+            'status' => 'queued',
+            'total_resources' => count(SyncWebPostoCompanyInitialLoad::RESOURCES),
+            'was_synchronized' => true,
+        ]);
+        $runner = Mockery::mock(WebPostoInitialLoadRunner::class);
+        $runner->shouldReceive('run')->once()->andThrow(new RuntimeException('API indisponível'));
+
+        try {
+            (new SyncWebPostoCompanyInitialLoad($run->id))->handle($runner);
+            $this->fail('A falha deveria ter sido propagada.');
+        } catch (RuntimeException) {
+        }
+
+        $this->assertSame(
+            WebPostoCredential::STATUS_SINCRONIZADO,
+            WebPostoCredential::query()->where('empresa_codigo', 9999)->value('implantacao_status'),
+        );
+    }
+
+    public function test_initial_load_skips_resources_already_completed_by_dependencies(): void
+    {
+        $run = WebPostoInitialSyncRun::query()->create([
+            'empresa_codigo' => 9999,
+            'status' => 'queued',
+            'total_resources' => count(SyncWebPostoCompanyInitialLoad::RESOURCES),
+            'completed_resources' => ['cartoes', 'venda_itens', 'abastecimentos'],
+        ]);
+        $runner = Mockery::mock(WebPostoInitialLoadRunner::class);
+        $expected = array_values(array_diff(
+            SyncWebPostoCompanyInitialLoad::RESOURCES,
+            ['cartoes', 'venda_itens', 'abastecimentos'],
+        ));
+        $called = [];
+        $runner->shouldReceive('run')->times(count($expected))
+            ->andReturnUsing(function (int $empresa, string $resource) use (&$called): array {
+                $called[] = $resource;
+
+                return [$resource];
+            });
+
+        (new SyncWebPostoCompanyInitialLoad($run->id))->handle($runner);
+
+        $this->assertSame($expected, $called);
+        $this->assertSame('success', $run->fresh()->status);
     }
 
     public function test_unsynchronized_company_cannot_queue_a_manual_reload(): void
