@@ -231,6 +231,52 @@ class ChimbaReconciliationServiceTest extends TestCase
         $this->assertSame(now()->toDateString(), $capturedQuery['dataFinal']);
     }
 
+    public function test_caixas_always_reconcile_the_complete_two_month_window_even_after_a_recent_success(): void
+    {
+        $service = IntegrationService::query()->create([
+            'name' => 'Reconciliação teste janela completa de caixas',
+            'slug' => 'caixas-full-window-'.str()->uuid(),
+            'category' => 'atualizacao',
+            'resource' => 'webposto-b2-reconciliation',
+            'empresa_codigo' => 0,
+            'frequency_minutes' => 1440,
+            'lookback_days' => 1,
+            'active' => false,
+            'settings' => ['bases' => ['b2'], 'resources' => ['caixas']],
+        ]);
+        IntegrationServiceRun::query()->create([
+            'integration_service_id' => $service->id,
+            'status' => 'success',
+            'finished_at' => now()->subHour(),
+        ]);
+        $run = IntegrationServiceRun::query()->create([
+            'integration_service_id' => $service->id,
+            'status' => 'running',
+            'started_at' => now(),
+        ]);
+        $capturedQuery = null;
+        $synchronizer = Mockery::mock(WebPostoCursorSynchronizer::class);
+        $synchronizer->shouldReceive('synchronize')
+            ->once()
+            ->andReturnUsing(function (string $endpoint, int $empresaCodigo, callable $persist, array $query = []) use (&$capturedQuery): array {
+                $capturedQuery = $query;
+
+                return ['received' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0];
+            });
+        $reconciliation = new WebPostoReconciliationService(
+            app(WebPostoNewRecordsResourceCatalog::class),
+            $synchronizer,
+            app(IntegrationRunChangeRecorder::class),
+            app(WebPostoPendingRecordService::class),
+            app(\App\Services\WebPosto\WebPostoSourceDeletionService::class),
+        );
+
+        $reconciliation->synchronize(115424, ['caixas'], $run->id, null, 'webposto-b2-reconciliation');
+
+        $this->assertSame(now()->subMonths(2)->toDateString(), $capturedQuery['dataInicial']);
+        $this->assertSame(now()->toDateString(), $capturedQuery['dataFinal']);
+    }
+
     public function test_incremental_window_uses_two_months_for_b2_without_a_previous_success(): void
     {
         $service = IntegrationService::query()->create([

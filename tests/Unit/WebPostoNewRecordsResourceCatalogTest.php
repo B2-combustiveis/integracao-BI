@@ -27,6 +27,7 @@ class WebPostoNewRecordsResourceCatalogTest extends TestCase
         $this->assertSame(EstoquePeriodoImporter::class, $catalog['estoque_periodos']['importer']);
         $this->assertSame('lmcCodigo', $catalog['lmcs']['key']);
         $this->assertSame(LmcImporter::class, $catalog['lmcs']['importer']);
+        $this->assertTrue($catalog['lmcs']['reconciliation_full_window']);
         $this->assertSame('bombaCodigo', $catalog['bombas']['key']);
         $this->assertSame(BombaImporter::class, $catalog['bombas']['importer']);
         $this->assertSame('snapshot_new', $catalog['bombas']['mode']);
@@ -40,8 +41,12 @@ class WebPostoNewRecordsResourceCatalogTest extends TestCase
         $this->assertSame(FuncionarioImporter::class, $catalog['funcionarios']['importer']);
         $this->assertSame('caixaCodigo', $catalog['caixas']['key']);
         $this->assertSame(CaixaImporter::class, $catalog['caixas']['importer']);
+        $this->assertTrue($catalog['caixas']['reconciliation_full_window']);
         $this->assertSame('/INTEGRACAO/CAIXA_APRESENTADO', $catalog['caixas_apresentados']['endpoint']);
         $this->assertSame(CaixaApresentadoImporter::class, $catalog['caixas_apresentados']['importer']);
+        $this->assertTrue($catalog['caixas_apresentados']['reconciliation_full_window']);
+        $this->assertTrue($catalog['titulos_pagar']['reconciliation_cursor_from_start']);
+        $this->assertTrue($catalog['titulos_receber']['reconciliation_cursor_from_start']);
         $this->assertLessThan(
             array_search('caixas_apresentados', array_keys($catalog), true),
             array_search('caixas', array_keys($catalog), true),

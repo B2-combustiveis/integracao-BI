@@ -40,7 +40,7 @@ class IntegrationServiceController extends Controller
     public function status(): JsonResponse
     {
         $serviceQuery = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation']);
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync']);
         $serviceIds = (clone $serviceQuery)->pluck('id');
 
         $serviceModels = $serviceQuery
@@ -114,7 +114,7 @@ class IntegrationServiceController extends Controller
     public function clearCompleted(): RedirectResponse
     {
         $serviceIds = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation'])
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync'])
             ->pluck('id');
         $deleted = IntegrationServiceRun::query()
             ->whereIn('integration_service_id', $serviceIds)
@@ -166,7 +166,11 @@ class IntegrationServiceController extends Controller
             'started_at' => $run->started_at?->toIso8601String(),
             'finished_at' => $run->finished_at?->toIso8601String(),
             'error' => $run->error,
-            'companies' => $run->companyRuns->groupBy('empresa_codigo')
+            'companies' => $run->companyRuns->groupBy(
+                fn ($block): string => str_starts_with((string) $block->block_key, 'shared-')
+                    ? (string) $block->block_key
+                    : 'company-'.$block->empresa_codigo,
+            )
                 ->map(fn ($blocks) => $this->aggregateCompanyBlocks($blocks))
                 ->sortBy('position')->values()->all(),
         ];
@@ -183,6 +187,7 @@ class IntegrationServiceController extends Controller
     private function aggregateCompanyBlocks($blocks): array
     {
         $first = $blocks->sortBy('position')->first();
+        $shared = str_starts_with((string) $first->block_key, 'shared-');
         $multiBlock = $blocks->count() > 1;
         $statuses = $blocks->pluck('status');
         $status = match (true) {
@@ -201,8 +206,10 @@ class IntegrationServiceController extends Controller
             : $first->current_resource;
 
         return [
-            'empresa_codigo' => $first->empresa_codigo,
-            'empresa_nome' => $multiBlock ? Str::beforeLast($first->empresa_nome, ' · ') : $first->empresa_nome,
+            'empresa_codigo' => $shared ? null : $first->empresa_codigo,
+            'empresa_nome' => $shared
+                ? $first->empresa_nome
+                : ($multiBlock ? Str::beforeLast($first->empresa_nome, ' · ') : $first->empresa_nome),
             'position' => $blocks->min('position'),
             'status' => $status,
             'current_resource' => $currentResource,

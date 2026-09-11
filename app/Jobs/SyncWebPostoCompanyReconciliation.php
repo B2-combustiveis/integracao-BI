@@ -89,12 +89,27 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
     {
         $service = IntegrationService::query()->findOrFail($this->serviceId);
         $companyRun = IntegrationServiceCompanyRun::query()->findOrFail($this->companyRunId);
+        $parentIsActive = IntegrationServiceRun::query()
+            ->whereKey($this->runId)
+            ->where('status', 'running')
+            ->exists();
+        if ($companyRun->status !== 'pending' || ! $parentIsActive) {
+            return;
+        }
         $totals = ['received' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0];
         $resourceResults = [];
         $companyRun->update(['status' => 'running', 'started_at' => now(), 'error' => null]);
+        $shouldContinue = fn (): bool => IntegrationServiceCompanyRun::query()
+            ->whereKey($this->companyRunId)
+            ->where('status', 'running')
+            ->whereNull('finished_at')
+            ->exists();
 
         try {
-            $progress = function (string $state, string $resource, ?array $result) use ($companyRun, &$totals, &$resourceResults): void {
+            $progress = function (string $state, string $resource, ?array $result) use ($companyRun, $shouldContinue, &$totals, &$resourceResults): void {
+                if (! $shouldContinue()) {
+                    throw new \App\Exceptions\WebPostoSynchronizationCancelled;
+                }
                 if (in_array($state, ['completed', 'failed'], true) && $result !== null) {
                     $resourceResults[$resource] = $result;
                     foreach ($totals as $field => $value) {
@@ -120,6 +135,7 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
                     $this->runId,
                     $progress,
                     $service->resource,
+                    $shouldContinue,
                 )
                 : $synchronizer->synchronize(
                     (int) $companyRun->empresa_codigo,
@@ -127,6 +143,7 @@ class SyncWebPostoCompanyReconciliation implements ShouldBeUnique, ShouldQueue
                     $this->runId,
                     $progress,
                     $service->resource,
+                    $shouldContinue,
                 );
             $totals = collect($results)->reduce(function (array $carry, array $result): array {
                 foreach (array_keys($carry) as $field) {

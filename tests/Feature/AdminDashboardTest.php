@@ -103,4 +103,55 @@ class AdminDashboardTest extends TestCase
         $this->assertSame(40, $companies[0]['inserted']);
         $this->assertSame('Falha de teste', $companies[0]['error']);
     }
+
+    public function test_services_status_does_not_attach_shared_b2_blocks_to_posto_das_pedras(): void
+    {
+        $service = IntegrationService::query()->where('resource', 'webposto-b2-reconciliation')->sole();
+        $run = $service->runs()->create([
+            'status' => 'running',
+            'period_start' => today(),
+            'period_end' => today(),
+            'started_at' => now(),
+            'created_at' => now()->addMinute(),
+        ]);
+
+        $run->companyRuns()->create([
+            'empresa_codigo' => 48659,
+            'empresa_nome' => 'POSTO DAS PEDRAS LTDA',
+            'block_key' => 'block-1',
+            'position' => 1,
+            'status' => 'success',
+            'received' => 100,
+            'inserted' => 10,
+            'skipped' => 0,
+            'resource_results' => [],
+            'started_at' => now()->subMinute(),
+            'finished_at' => now(),
+        ]);
+        $run->companyRuns()->create([
+            'empresa_codigo' => 48659,
+            'empresa_nome' => 'B2 · cliente empresas (compartilhado)',
+            'block_key' => 'shared-cliente_empresas',
+            'position' => 100,
+            'status' => 'running',
+            'received' => 50,
+            'inserted' => 5,
+            'skipped' => 0,
+            'resource_results' => [],
+            'started_at' => now(),
+        ]);
+
+        $response = $this->withoutMiddleware(EnsureAdminSession::class)->getJson('/admin/services/status');
+
+        $response->assertOk();
+        $serviceEntry = collect($response->json('services'))->firstWhere('id', $service->id);
+        $companies = collect($serviceEntry['run']['companies']);
+
+        $this->assertCount(2, $companies);
+        $this->assertSame('success', $companies->firstWhere('empresa_nome', 'POSTO DAS PEDRAS LTDA')['status']);
+        $shared = $companies->firstWhere('empresa_nome', 'B2 compartilhado');
+        $this->assertNotNull($shared);
+        $this->assertNull($shared['empresa_codigo']);
+        $this->assertSame('running', $shared['status']);
+    }
 }

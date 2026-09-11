@@ -25,12 +25,16 @@ class WebPostoReconciliationService
         int $runId,
         ?callable $onProgress = null,
         string $controlNamespace = 'reconciliation',
+        ?callable $shouldContinue = null,
     ): array
     {
         $results = [];
         $incrementalStart = $this->incrementalStartDate($runId);
         $base = WebPostoCredential::query()->where('empresa_codigo', $empresa)->value('base');
         foreach (array_values(array_unique($resources)) as $resource) {
+            if ($shouldContinue !== null && $shouldContinue() !== true) {
+                throw new \App\Exceptions\WebPostoSynchronizationCancelled;
+            }
             $definition = $this->catalog->get($resource, $base);
             if ($onProgress !== null) {
                 $onProgress('running', $resource, null);
@@ -39,12 +43,15 @@ class WebPostoReconciliationService
             try {
                 $retried = $this->pendingRecords->retry($definition, $empresa, $runId, $resource);
                 $this->recordProgress($runId, $retried);
-                $reconciled = $this->reconcileResource($definition, $empresa, $runId, $resource, $onProgress, $incrementalStart, $controlNamespace);
+                $reconciled = $this->reconcileResource($definition, $empresa, $runId, $resource, $onProgress, $incrementalStart, $controlNamespace, null, $shouldContinue);
                 $results[$resource] = $this->mergeResults($retried, $reconciled) + ['status' => 'success'];
                 if ($onProgress !== null) {
                     $onProgress('completed', $resource, $results[$resource]);
                 }
             } catch (Throwable $exception) {
+                if ($exception instanceof \App\Exceptions\WebPostoSynchronizationCancelled) {
+                    throw $exception;
+                }
                 $results[$resource] = [
                     'status' => 'failed',
                     'error' => $this->safeError($exception),
@@ -80,6 +87,7 @@ class WebPostoReconciliationService
         int $runId,
         ?callable $onProgress = null,
         string $controlNamespace = 'reconciliation',
+        ?callable $shouldContinue = null,
     ): array {
         $allowedCompanies = array_values(array_unique(array_map('intval', $companyCodes)));
         $results = [];
@@ -87,6 +95,9 @@ class WebPostoReconciliationService
         $base = WebPostoCredential::query()->where('empresa_codigo', $credentialCompany)->value('base');
 
         foreach (array_values(array_unique($resources)) as $resource) {
+            if ($shouldContinue !== null && $shouldContinue() !== true) {
+                throw new \App\Exceptions\WebPostoSynchronizationCancelled;
+            }
             $definition = $this->catalog->get($resource, $base);
             if ($onProgress !== null) {
                 $onProgress('running', $resource, null);
@@ -110,12 +121,16 @@ class WebPostoReconciliationService
                     $incrementalStart,
                     $controlNamespace.':shared',
                     $allowedCompanies,
+                    $shouldContinue,
                 );
                 $results[$resource] = $this->mergeResults($retried, $reconciled) + ['status' => 'success'];
                 if ($onProgress !== null) {
                     $onProgress('completed', $resource, $results[$resource]);
                 }
             } catch (Throwable $exception) {
+                if ($exception instanceof \App\Exceptions\WebPostoSynchronizationCancelled) {
+                    throw $exception;
+                }
                 $results[$resource] = [
                     'status' => 'failed', 'error' => $this->safeError($exception),
                     'received' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0,
@@ -174,10 +189,18 @@ class WebPostoReconciliationService
         ?string $incrementalStart,
         string $controlNamespace,
         ?array $allowedCompanies = null,
+        ?callable $shouldContinue = null,
     ): array
     {
         $query = $definition['query'];
-        if (($definition['reconciliation_updated_period'] ?? false) === true && $incrementalStart !== null) {
+        $fullWindowStart = null;
+        if (($definition['reconciliation_full_window'] ?? false) === true
+            && $this->usesLimitedReconciliationWindow($controlNamespace)) {
+            $months = max(1, (int) config('integration.webposto.reconciliation_max_lookback_months', 2));
+            $fullWindowStart = now()->subMonths($months)->toDateString();
+            $query['dataInicial'] = $fullWindowStart;
+            $query['dataFinal'] = now()->toDateString();
+        } elseif (($definition['reconciliation_updated_period'] ?? false) === true && $incrementalStart !== null) {
             $query['dataInicial'] = $incrementalStart;
             $query['dataFinal'] = now()->toDateString();
         } elseif ($this->usesLimitedReconciliationWindow($controlNamespace) && isset($query['dataInicial'])) {
@@ -240,6 +263,7 @@ class WebPostoReconciliationService
             controlKey: $definition['endpoint'].':'.$controlNamespace,
             resumeFromCheckpoint: true,
             onPageProgress: $onProgress === null ? null : fn (array $progress) => $onProgress('progress', $resource, $progress),
+            shouldContinue: $shouldContinue,
         );
         $deletions = $this->sourceDeletions->confirm(
             $definition,
@@ -253,7 +277,9 @@ class WebPostoReconciliationService
         return [
             ...$result,
             ...$deletions,
-            'period_start' => ($definition['reconciliation_updated_period'] ?? false) === true ? $incrementalStart : null,
+            'period_start' => ($definition['reconciliation_updated_period'] ?? false) === true
+                ? ($fullWindowStart ?? $incrementalStart)
+                : null,
             'period_end' => ($definition['reconciliation_updated_period'] ?? false) === true ? now()->toDateString() : null,
         ];
     }
@@ -384,6 +410,12 @@ class WebPostoReconciliationService
         string $controlNamespace,
         ?array $allowedCompanies = null,
     ): int {
+        // Em recursos filtrados por data de atualizacao, um codigo antigo pode ser
+        // alterado hoje. Comecar no menor codigo local recente pularia esse registro.
+        if (($definition['reconciliation_cursor_from_start'] ?? false) === true) {
+            return 1;
+        }
+
         if (! $this->usesLimitedReconciliationWindow($controlNamespace)
             || ! isset($query['dataInicial'])
             || ($definition['cursor']['direct_list'] ?? false)

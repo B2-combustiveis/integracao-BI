@@ -2,6 +2,7 @@
 
 namespace App\Services\Integration;
 
+use App\Jobs\SyncClickHouseIncremental;
 use App\Jobs\SyncWebPostoDatabase;
 use App\Jobs\SyncWebPostoNewRecords;
 use App\Jobs\SyncWebPostoReconciliation;
@@ -49,6 +50,7 @@ class IntegrationServiceDispatcher
                 'webposto-new-records' => SyncWebPostoNewRecords::dispatch($service->id),
                 'webposto-chimba-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id)->onQueue(SyncWebPostoReconciliation::CHIMBA_QUEUE),
                 'webposto-b2-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id),
+                'clickhouse-incremental-sync' => SyncClickHouseIncremental::dispatch($service->id),
                 default => throw new \InvalidArgumentException("Recurso {$service->resource} não possui job."),
             };
 

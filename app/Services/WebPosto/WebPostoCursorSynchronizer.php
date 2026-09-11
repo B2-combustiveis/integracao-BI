@@ -2,6 +2,7 @@
 
 namespace App\Services\WebPosto;
 
+use App\Exceptions\WebPostoSynchronizationCancelled;
 use App\Models\WebPostoSyncControl;
 use App\Models\WebPostoSyncEndpointRun;
 use Illuminate\Support\Facades\DB;
@@ -19,7 +20,7 @@ class WebPostoCursorSynchronizer
     /**
      * @param callable(mixed, array<string, mixed>): array<string, mixed> $persist
      * @param array<string, mixed> $query
-     * @param array{type?: string, request_field?: string, response_field?: string, initial_value?: int, prefer_initial_value?: bool, single_page?: bool, direct_list?: bool} $cursor
+     * @param array{type?: string, request_field?: string, response_field?: string, initial_value?: int, prefer_initial_value?: bool, single_page?: bool, direct_list?: bool, request_overlap?: int} $cursor
      * @param array<string, mixed>|null $initialQuery
      * @return array<string, int>
      */
@@ -36,7 +37,9 @@ class WebPostoCursorSynchronizer
         bool $omitCursorWhenZero = false,
         bool $resumeFromCheckpoint = false,
         ?callable $onPageProgress = null,
+        ?callable $shouldContinue = null,
     ): array {
+        $this->ensureActive($shouldContinue);
         $type = (string) ($cursor['type'] ?? 'ultimo_codigo');
         $requestField = (string) ($cursor['request_field'] ?? 'ultimoCodigo');
         $responseField = (string) ($cursor['response_field'] ?? 'ultimoCodigo');
@@ -44,6 +47,7 @@ class WebPostoCursorSynchronizer
         $preferInitialValue = (bool) ($cursor['prefer_initial_value'] ?? false);
         $singlePage = (bool) ($cursor['single_page'] ?? false);
         $directList = (bool) ($cursor['direct_list'] ?? false);
+        $requestOverlap = max(0, (int) ($cursor['request_overlap'] ?? 0));
         $control = WebPostoSyncControl::query()->firstOrCreate(
             ['empresa_codigo' => $empresaCodigo, 'endpoint' => $controlKey ?? $endpoint],
             [
@@ -98,6 +102,7 @@ class WebPostoCursorSynchronizer
 
         try {
             for ($page = 0; $page < $maxPages; $page++) {
+                $this->ensureActive($shouldContinue);
                 $visiblePage = $pageOffset + $page + 1;
                 $heartbeat = now();
                 $metadata = [...$metadata,
@@ -116,9 +121,10 @@ class WebPostoCursorSynchronizer
                     : ($page === 0 && $initialQuery !== null
                     && ($initialLoad || ($omitCursorWhenZero && $current === 0))
                     ? [...$query, ...$initialQuery]
-                    : [...$query, $requestField => $current]);
+                    : [...$query, $requestField => max(0, $current - $requestOverlap)]);
                 $result = $this->client->get($endpoint, $empresaCodigo, $requestQuery);
                 $totals['duration_ms'] += (int) $result['duration_ms'];
+                $this->ensureActive($shouldContinue);
 
                 if (! $result['response']->successful()) {
                     throw new RuntimeException("WebPosto respondeu HTTP {$result['response']->status()} em {$endpoint}.");
@@ -147,7 +153,11 @@ class WebPostoCursorSynchronizer
                 $next = is_array($payload) && ! $directList && is_numeric($payload[$responseField] ?? null)
                     ? (int) $payload[$responseField]
                     : null;
-                if (! $directList && ($next === null || $next <= $current)) {
+                $terminalOverlapPage = ! $directList
+                    && $requestOverlap > 0
+                    && $next === $current;
+                if (! $directList && ($next === null || $next < $current
+                    || ($next === $current && ! $terminalOverlapPage))) {
                     throw new RuntimeException("Cursor {$responseField} ausente ou sem avanco em {$endpoint}.");
                 }
 
@@ -163,7 +173,10 @@ class WebPostoCursorSynchronizer
                     $totals[$field] += (int) ($stored[$field] ?? 0);
                 }
 
-                if ($directList) {
+                // A API pode devolver novamente o codigo da borda na pagina final.
+                // Persistimos essa pagina (ela pode conter outros vinculos do mesmo
+                // codigo) e encerramos, em vez de tratar o empate como travamento.
+                if ($directList || $terminalOverlapPage) {
                     $this->finish($control, $run, $totals);
 
                     return $totals;
@@ -191,6 +204,19 @@ class WebPostoCursorSynchronizer
             }
 
             throw new RuntimeException("Limite de paginacao atingido em {$endpoint}.");
+        } catch (WebPostoSynchronizationCancelled $exception) {
+            $control->update([
+                'status' => 'idle',
+                'last_completed_at' => now(),
+                'last_error' => null,
+                'metadata' => [...$metadata,
+                    'resume_available' => (int) $control->last_code > $initialValue,
+                    'heartbeat_at' => now()->toIso8601String(),
+                ],
+            ]);
+            $run->update([...$totals, 'status' => 'failed', 'error' => $exception->getMessage(), 'finished_at' => now()]);
+
+            throw $exception;
         } catch (Throwable $exception) {
             $message = mb_substr((string) preg_replace('/([?&]chave=)[^&\s]+/i', '$1SEU_TOKEN_AQUI', $exception->getMessage()), 0, 2000);
             $control->update([
@@ -206,6 +232,13 @@ class WebPostoCursorSynchronizer
             $run->update([...$totals, 'status' => 'failed', 'error' => $message, 'finished_at' => now()]);
 
             throw $exception;
+        }
+    }
+
+    private function ensureActive(?callable $shouldContinue): void
+    {
+        if ($shouldContinue !== null && $shouldContinue() !== true) {
+            throw new WebPostoSynchronizationCancelled;
         }
     }
 

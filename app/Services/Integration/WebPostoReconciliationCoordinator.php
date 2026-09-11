@@ -85,6 +85,18 @@ class WebPostoReconciliationCoordinator
         ]);
     }
 
+    /**
+     * Reconciliacoes fazem varreduras sequenciais pesadas nas mesmas tabelas do
+     * webposto que o sync do ClickHouse le. Nao ha risco de corrupcao (o
+     * ClickHouse sync so le), mas rodar junto competiria por I/O a toa - por
+     * isso o sync do ClickHouse consulta este metodo antes de comecar e adia
+     * para o proximo tick se alguma reconciliacao pesada estiver rodando.
+     */
+    public function heavyReadIsRunning(): bool
+    {
+        return $this->hasRunningReconciliation();
+    }
+
     private function hasRunningReconciliation(): bool
     {
         $serviceIds = IntegrationService::query()->whereIn('resource', self::RECONCILIATION_RESOURCES)->pluck('id');

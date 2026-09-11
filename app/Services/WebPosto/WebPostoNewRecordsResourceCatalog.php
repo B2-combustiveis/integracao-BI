@@ -91,6 +91,7 @@ class WebPostoNewRecordsResourceCatalog
                 'importer' => LmcImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
                 'reconciliation_updated_period' => true,
+                'reconciliation_full_window' => true,
             ],
             'bombas' => [
                 'endpoint' => '/INTEGRACAO/BOMBA',
@@ -185,6 +186,9 @@ class WebPostoNewRecordsResourceCatalog
                 'importer' => CaixaImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
                 'reconciliation_updated_period' => true,
+                // O WebPosto altera fechamento e valores do caixa sem necessariamente
+                // avancar dataHoraAtualizacao. Releia sempre a janela operacional inteira.
+                'reconciliation_full_window' => true,
             ],
             'caixas_apresentados' => [
                 'endpoint' => '/INTEGRACAO/CAIXA_APRESENTADO',
@@ -199,6 +203,7 @@ class WebPostoNewRecordsResourceCatalog
                 'importer' => CaixaApresentadoImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
                 'reconciliation_updated_period' => true,
+                'reconciliation_full_window' => true,
             ],
             'fornecedores' => [
                 'endpoint' => '/INTEGRACAO/FORNECEDOR',
@@ -250,6 +255,7 @@ class WebPostoNewRecordsResourceCatalog
                 'importer' => TituloPagarImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
                 'reconciliation_updated_period' => true,
+                'reconciliation_cursor_from_start' => true,
             ],
             'cliente_grupos' => [
                 'endpoint' => '/INTEGRACAO/GRUPO_CLIENTE',
@@ -279,6 +285,9 @@ class WebPostoNewRecordsResourceCatalog
                 'natural_keys' => ['clienteCodigo'],
                 'query_company_field' => 'empresaCodigo',
                 'limit' => 200,
+                // O mesmo codigo aparece uma vez por empresa. Sobrepor um codigo
+                // impede que a borda da pagina pule empresas do ultimo grupo.
+                'cursor' => ['request_overlap' => 1],
                 'query' => [],
                 'importer' => ClienteEmpresaImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
@@ -344,6 +353,7 @@ class WebPostoNewRecordsResourceCatalog
                 'importer' => TituloReceberImporter::class,
                 'updated_field' => 'dataHoraAtualizacao',
                 'reconciliation_updated_period' => true,
+                'reconciliation_cursor_from_start' => true,
             ],
             'contas_bancarias' => [
                 'endpoint' => '/INTEGRACAO/CONTA',

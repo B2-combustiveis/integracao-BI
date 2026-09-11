@@ -39,10 +39,22 @@ class SyncWebPostoCompanyNewRecords implements ShouldBeUnique, ShouldQueue
     {
         $service = IntegrationService::query()->findOrFail($this->serviceId);
         $companyRun = IntegrationServiceCompanyRun::query()->findOrFail($this->companyRunId);
+        $parentIsActive = IntegrationServiceRun::query()
+            ->whereKey($this->runId)
+            ->where('status', 'running')
+            ->exists();
+        if ($companyRun->status !== 'pending' || ! $parentIsActive) {
+            return;
+        }
 
         $companyTotals = ['received' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0];
         $resourceResults = [];
         $companyRun->update(['status' => 'running', 'started_at' => now(), 'error' => null]);
+        $shouldContinue = fn (): bool => IntegrationServiceCompanyRun::query()
+            ->whereKey($this->companyRunId)
+            ->where('status', 'running')
+            ->whereNull('finished_at')
+            ->exists();
 
         try {
             $results = $synchronizer->synchronize(
@@ -51,9 +63,13 @@ class SyncWebPostoCompanyNewRecords implements ShouldBeUnique, ShouldQueue
                 $this->runId,
                 function (string $state, string $resource, ?array $stored) use (
                     $companyRun,
+                    $shouldContinue,
                     &$companyTotals,
                     &$resourceResults,
                 ): void {
+                    if (! $shouldContinue()) {
+                        throw new \App\Exceptions\WebPostoSynchronizationCancelled;
+                    }
                     if (in_array($state, ['completed', 'failed'], true) && $stored !== null) {
                         $resourceResults[$resource] = $stored;
                         foreach ($companyTotals as $field => $value) {
@@ -80,6 +96,7 @@ class SyncWebPostoCompanyNewRecords implements ShouldBeUnique, ShouldQueue
                         'resource_results' => $resourceResults,
                     ]);
                 },
+                $shouldContinue,
             );
 
             $resourceFailures = collect($results)
@@ -98,13 +115,15 @@ class SyncWebPostoCompanyNewRecords implements ShouldBeUnique, ShouldQueue
             ]);
         } catch (Throwable $exception) {
             $message = $this->safeError($exception);
-            $companyRun->update([
-                ...$companyTotals,
-                'status' => 'failed',
-                'current_resource' => null,
-                'error' => $message,
-                'finished_at' => now(),
-            ]);
+            if ($companyRun->refresh()->finished_at === null) {
+                $companyRun->update([
+                    ...$companyTotals,
+                    'status' => 'failed',
+                    'current_resource' => null,
+                    'error' => $message,
+                    'finished_at' => now(),
+                ]);
+            }
         }
 
         $this->finalizeRunIfComplete();

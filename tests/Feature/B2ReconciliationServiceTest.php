@@ -146,6 +146,20 @@ class B2ReconciliationServiceTest extends TestCase
         ));
     }
 
+    public function test_updated_titles_always_start_from_the_safe_cursor(): void
+    {
+        $method = new \ReflectionMethod(WebPostoReconciliationService::class, 'reconciliationCursorInitialValue');
+        $definition = app(\App\Services\WebPosto\WebPostoNewRecordsResourceCatalog::class)->get('titulos_pagar');
+
+        $this->assertSame(1, $method->invoke(
+            app(WebPostoReconciliationService::class),
+            $definition,
+            115424,
+            ['dataInicial' => now()->subDay()->toDateString()],
+            'webposto-b2-reconciliation',
+        ));
+    }
+
     public function test_shared_pages_are_strictly_partitioned_by_whitelisted_company(): void
     {
         $method = new \ReflectionMethod(WebPostoReconciliationService::class, 'sharedRowsByCompany');

@@ -114,7 +114,8 @@ class WebPostoSourceDeletionService
                 ['resource' => $resource, 'empresa_codigo' => $empresa, 'natural_key_hash' => $hash],
                 ['table_name' => $table, 'natural_key' => json_encode($naturalKey),
                     'payload' => json_encode($payload), 'confirmed_run_id' => $runId,
-                    'archived_at' => now(), 'created_at' => now(), 'updated_at' => now()],
+                    'archived_at' => now(), 'restored_at' => null,
+                    'created_at' => now(), 'updated_at' => now()],
             );
             $delete = DB::connection('webposto')->table($table)->where($companyField, $empresa);
             foreach ($naturalKey as $field => $value) {

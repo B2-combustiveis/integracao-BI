@@ -26,10 +26,14 @@ class WebPostoNewRecordsSyncService
         array $resources,
         int $runId,
         ?callable $onProgress = null,
+        ?callable $shouldContinue = null,
     ): array {
         $results = [];
         $base = WebPostoCredential::query()->where('empresa_codigo', $empresa)->value('base');
         foreach (array_values(array_unique($resources)) as $resource) {
+            if ($shouldContinue !== null && $shouldContinue() !== true) {
+                throw new \App\Exceptions\WebPostoSynchronizationCancelled;
+            }
             $definition = $this->catalog->get($resource, $base);
             if ($onProgress !== null) {
                 $onProgress('running', $resource, null);
@@ -38,7 +42,7 @@ class WebPostoNewRecordsSyncService
                 $retried = $this->pendingRecords->retry($definition, $empresa, $runId, $resource);
                 $this->recordProgress($runId, $retried);
                 if (($definition['mode'] ?? 'cursor') === 'snapshot_new') {
-                    $synchronized = $this->synchronizeSnapshotNew($definition, $empresa, $runId, $resource);
+                    $synchronized = $this->synchronizeSnapshotNew($definition, $empresa, $runId, $resource, $shouldContinue);
                     $results[$resource] = $this->mergeResults($retried, $synchronized);
                     $this->recordProgress($runId, $synchronized);
                     if ($onProgress !== null) {
@@ -118,6 +122,7 @@ class WebPostoNewRecordsSyncService
                     onPageProgress: $onProgress === null
                         ? null
                         : fn (array $progress) => $onProgress('progress', $resource, $progress),
+                    shouldContinue: $shouldContinue,
                 );
                 $results[$resource] = $this->mergeResults($retried, $synchronized);
                 if ($onProgress !== null) {
@@ -132,9 +137,12 @@ class WebPostoNewRecordsSyncService
     }
 
     /** @param array<string, mixed> $definition @return array<string, int> */
-    private function synchronizeSnapshotNew(array $definition, int $empresa, int $runId, string $resource): array
+    private function synchronizeSnapshotNew(array $definition, int $empresa, int $runId, string $resource, ?callable $shouldContinue): array
     {
         $result = $this->client->get($definition['endpoint'], $empresa, $definition['query']);
+        if ($shouldContinue !== null && $shouldContinue() !== true) {
+            throw new \App\Exceptions\WebPostoSynchronizationCancelled;
+        }
         if (! $result['response']->successful()) {
             throw new RuntimeException('WebPosto respondeu HTTP '.$result['response']->status().' em '.$definition['endpoint'].'.');
         }
