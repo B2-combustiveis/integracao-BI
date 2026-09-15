@@ -1,0 +1,23 @@
+FROM php:8.3-cli
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git unzip libicu-dev libzip-dev \
+    && docker-php-ext-install intl pdo_mysql zip pcntl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+COPY docker/php/memory.ini /usr/local/etc/php/conf.d/memory.ini
+COPY docker/php/prod.ini /usr/local/etc/php/conf.d/zz-prod.ini
+
+WORKDIR /var/www/html
+
+# Código embutido na imagem (sem bind mount) - cada deploy = nova imagem = processo novo,
+# então o opcache nunca fica servindo rota/classe antiga (evita o problema que já pegou o bi_backend_api).
+COPY . .
+
+RUN composer install --no-interaction --no-dev --optimize-autoloader \
+    && chmod -R 775 storage bootstrap/cache
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "php artisan migrate --force && PHP_CLI_SERVER_WORKERS=4 php -S 0.0.0.0:8000 -t public"]

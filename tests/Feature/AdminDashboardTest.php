@@ -23,20 +23,13 @@ class AdminDashboardTest extends TestCase
         $this->get('/admin')->assertRedirect('/admin/login');
     }
 
-    public function test_dashboard_renders_local_overview(): void
+    public function test_dashboard_waits_for_source_selection_before_loading_overview(): void
     {
-        $overview = [
-            'generated_at' => now()->toIso8601String(),
-            'connections' => [['key' => 'webposto', 'label' => 'WebPosto', 'status' => 'online', 'database' => 'webposto', 'latency_ms' => 1.2]],
-            'summary' => ['base_1' => 33, 'base_2' => 0, 'api_tokens' => 2, 'tables' => 2],
-            'credentials' => [['empresa_codigo' => 4604, 'empresa_nome' => 'Posto Teste', 'base_url' => 'https://webposto.test', 'active' => true, 'last_used' => null]],
-            'tables' => [['name' => 'fornecedores', 'records' => 200, 'columns' => 27, 'last_update' => null, 'size_bytes' => 1024, 'modified_sync' => true]],
-        ];
-        $this->mock(AdminOverviewService::class, fn (MockInterface $mock) => $mock->shouldReceive('get')->once()->andReturn($overview));
+        $this->mock(AdminOverviewService::class, fn (MockInterface $mock) => $mock->shouldNotReceive('get'));
 
         $this->withoutMiddleware(EnsureAdminSession::class)->get('/admin')
-            ->assertOk()->assertSee('Integração BI')->assertSee('fornecedores')
-            ->assertSee('new-records-sync')->assertSee('refresh-tables');
+            ->assertOk()->assertSee('Integração BI')->assertSee('Fonte da integração')
+            ->assertSee('WebPosto')->assertSee('Alterdata')->assertSee('refresh-tables');
     }
 
     public function test_overview_endpoint_returns_json(): void
@@ -44,9 +37,15 @@ class AdminDashboardTest extends TestCase
         $overview = ['generated_at' => now()->toIso8601String(), 'connections' => [],
             'summary' => ['base_1' => 0, 'base_2' => 0, 'api_tokens' => 0, 'tables' => 0],
             'credentials' => [], 'tables' => []];
-        $this->mock(AdminOverviewService::class, fn (MockInterface $mock) => $mock->shouldReceive('get')->once()->andReturn($overview));
-        $this->withoutMiddleware(EnsureAdminSession::class)->getJson('/admin/overview')
+        $this->mock(AdminOverviewService::class, fn (MockInterface $mock) => $mock->shouldReceive('get')->once()->with('webposto', null)->andReturn($overview));
+        $this->withoutMiddleware(EnsureAdminSession::class)->getJson('/admin/overview?source=webposto')
             ->assertOk()->assertJsonPath('summary.tables', 0);
+    }
+
+    public function test_overview_endpoint_requires_a_valid_source(): void
+    {
+        $this->withoutMiddleware(EnsureAdminSession::class)->getJson('/admin/overview')->assertUnprocessable();
+        $this->withoutMiddleware(EnsureAdminSession::class)->getJson('/admin/overview?source=clickhouse')->assertUnprocessable();
     }
 
     public function test_services_screen_is_available(): void

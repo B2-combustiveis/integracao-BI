@@ -4,6 +4,7 @@ namespace App\Services\ClickHouse;
 
 use App\Models\ClickHouseSyncControl;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -20,8 +21,7 @@ class ClickHouseTableSynchronizer
     public function __construct(
         private readonly ClickHouseService $clickHouse,
         private readonly ClickHouseTableCatalog $catalog,
-    ) {
-    }
+    ) {}
 
     /**
      * Dropa, recria e recarrega uma tabela inteira. So para bootstrap/DR - nunca agendado.
@@ -104,6 +104,10 @@ class ClickHouseTableSynchronizer
             return $this->syncFull($table);
         }
 
+        if ($definition['reconcile_count'] && ! $this->countsMatch($table)) {
+            return $this->syncFull($table);
+        }
+
         $watermark = $control->last_watermark?->format('Y-m-d H:i:s') ?? '1970-01-01 00:00:00';
 
         $changedCount = $this->baseQuery($table, $definition)
@@ -116,7 +120,10 @@ class ClickHouseTableSynchronizer
             return ['received' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'skipped' => 0];
         }
 
-        $pkCol = array_key_exists('codigo', $definition['columns']) ? 'codigo' : 'id';
+        // O id e a unica chave globalmente unica em todas as tabelas espelhadas.
+        // `codigo` e uma chave de negocio que frequentemente se repete entre
+        // empresas; apaga-la sem empresaCodigo removeria dados de outros postos.
+        $pkCol = 'id';
         $pks = $this->baseQuery($table, $definition)
             ->where($this->watermarkColumn($definition), '>', $watermark)
             ->pluck($pkCol)
@@ -169,8 +176,17 @@ class ClickHouseTableSynchronizer
         return $prefix.'updated_at';
     }
 
+    private function countsMatch(string $table): bool
+    {
+        $mysqlCount = DB::connection('webposto')->table($table)->count();
+        $database = config('clickhouse.database');
+        $clickHouseCount = (int) $this->clickHouse->queryScalar("SELECT count() FROM {$database}.{$table}");
+
+        return $mysqlCount === $clickHouseCount;
+    }
+
     /**
-     * @param array<string, mixed> $definition
+     * @param  array<string, mixed>  $definition
      */
     private function createTable(string $table, array $definition): void
     {
@@ -186,7 +202,7 @@ class ClickHouseTableSynchronizer
     }
 
     /**
-     * @param array<string, mixed> $definition
+     * @param  array<string, mixed>  $definition
      */
     private function baseQuery(string $table, array $definition): Builder
     {
@@ -214,8 +230,8 @@ class ClickHouseTableSynchronizer
     }
 
     /**
-     * @param \Illuminate\Support\Collection<int, object> $rows
-     * @param array<string, string> $columns
+     * @param  Collection<int, object>  $rows
+     * @param  array<string, string>  $columns
      */
     private function insertBatch(string $table, $rows, array $columns): void
     {

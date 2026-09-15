@@ -2,6 +2,12 @@
 
 return [
 
+    'alterdata' => [
+        'base_url' => env('ALTER_DATA_BASE_URL', 'https://dp.pack.alterdata.com.br/api/v1'),
+        'token' => env('ALTER_DATA_TOKEN'),
+        'timeout' => (int) env('ALTER_DATA_TIMEOUT', 30),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Third Party Services

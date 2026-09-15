@@ -20,7 +20,42 @@ class ClickHouseTableCatalog
      * do Chimba nao atrase o sync das ~24 tabelas pequenas atras delas na
      * mesma fila.
      */
-    private const HEAVY_TABLES = ['venda_itens', 'abastecimentos', 'vendas', 'compra_itens'];
+    private const HEAVY_TABLES = ['venda_itens', 'abastecimentos', 'vendas', 'compra_itens', 'movimentos_conta'];
+
+    /**
+     * Tabelas cuja paridade de quantidade deve ser validada a cada rodada.
+     * Uma divergencia indica bootstrap incompleto, exclusao na origem ou uma
+     * carga interrompida e dispara uma recarga autocorretiva da tabela afetada.
+     */
+    private const COUNT_RECONCILIATION_TABLES = [
+        'contas_bancarias',
+        'estoque_periodos',
+        'produto_empresas',
+        'caixas_apresentados',
+        'bicos',
+        'empresas',
+        'funcionarios',
+        'produtos',
+        'produto_grupos',
+        'produto_subgrupos',
+        'produto_lmc_lmp',
+        'funcionario_funcoes',
+        'formas_pagamento',
+        'cliente_empresas',
+        'pdvs',
+        'tanques',
+        'fornecedores',
+        'clientes',
+        'cliente_grupos',
+        'bombas',
+        'administradoras',
+        'centros_custo',
+        'venda_itens',
+        'abastecimentos',
+        'vendas',
+        'compra_itens',
+        'movimentos_conta',
+    ];
 
     /**
      * @return array<string, array<string, mixed>>
@@ -30,9 +65,13 @@ class ClickHouseTableCatalog
         $defs = self::TABLE_DEFS;
 
         foreach ($defs as $table => $definition) {
-            $defs[$table]['cursor'] = self::BUSINESS_CURSORS[$table] ?? ['col' => 'codigo', 'key' => 'codigo', 'empresa_col' => null];
+            // `id` e a chave primaria local, monotonicamente crescente e nunca
+            // nula. `codigo` e opcional em varias tabelas e fazia cargas completas
+            // antigas ignorarem linhas cujo codigo de negocio era nulo.
+            $defs[$table]['cursor'] = self::BUSINESS_CURSORS[$table] ?? ['col' => 'id', 'key' => 'id', 'empresa_col' => null];
             $defs[$table]['parent_join'] = self::PARENT_JOINS[$table] ?? null;
             $defs[$table]['queue'] = in_array($table, self::HEAVY_TABLES, true) ? self::HEAVY_QUEUE : 'default';
+            $defs[$table]['reconcile_count'] = in_array($table, self::COUNT_RECONCILIATION_TABLES, true);
         }
 
         return $defs;
@@ -85,6 +124,16 @@ class ClickHouseTableCatalog
         // mesmo caso de produtos/fornecedores: 'codigo' aqui e o produtoCodigo
         // e se repete entre empresas (16728 linhas / so 8472 codigos distintos).
         'produto_empresas' => ['col' => 'codigo', 'key' => 'codigo', 'empresa_col' => 'empresaCodigo'],
+        // Estas tabelas usam o id local como cursor. Ele e monotonicamente
+        // crescente e globalmente unico, inclusive quando os codigos de negocio
+        // se repetem entre empresas ou podem ser nulos.
+        'produto_subgrupos' => ['col' => 'id', 'key' => 'id', 'empresa_col' => null],
+        'produto_lmc_lmp' => ['col' => 'id', 'key' => 'id', 'empresa_col' => null],
+        'cliente_empresas' => ['col' => 'id', 'key' => 'id', 'empresa_col' => null],
+        'pdvs' => ['col' => 'id', 'key' => 'id', 'empresa_col' => null],
+        'vales_funcionario' => ['col' => 'id', 'key' => 'id', 'empresa_col' => null],
+        'movimentos_conta' => ['col' => 'id', 'key' => 'id', 'empresa_col' => null],
+        'centros_custo' => ['col' => 'id', 'key' => 'id', 'empresa_col' => null],
     ];
 
     /**
@@ -513,8 +562,25 @@ class ClickHouseTableCatalog
                 'id' => 'UInt64',
                 'codigo' => 'UInt64',
                 'empresaCodigo' => 'UInt64',
+                'cnpj' => 'String',
                 'razao' => 'String',
                 'fantasia' => 'String',
+                'tipoLogradouro' => 'String',
+                'logradouro' => 'String',
+                'endereco' => 'String',
+                'bairro' => 'String',
+                'numero' => 'String',
+                'cep' => 'String',
+                'cidade' => 'String',
+                'estado' => 'String',
+                'latitude' => 'Decimal(10,7)',
+                'longitude' => 'Decimal(10,7)',
+                'ultimoUsuarioAlteracao' => 'String',
+                'centroCustoPrincipal' => 'String',
+                'empresaCodigoExterno' => 'String',
+                'sigla' => 'String',
+                'tipoImposto' => 'String',
+                'created_at' => 'DateTime',
                 'updated_at' => 'DateTime',
             ],
             'order_by' => '(empresaCodigo)',
@@ -582,6 +648,37 @@ class ClickHouseTableCatalog
             'partition_by' => '',
             'date_column' => 'id',
         ],
+        'produto_subgrupos' => [
+            'columns' => [
+                'id' => 'UInt64',
+                'empresaCodigo' => 'UInt64',
+                'grupoCodigo' => 'UInt64',
+                'subGrupoCodigo' => 'UInt64',
+                'descricao' => 'String',
+                'produtoSubGrupo2' => 'String',
+                'created_at' => 'DateTime',
+                'updated_at' => 'DateTime',
+            ],
+            'order_by' => '(empresaCodigo, grupoCodigo, subGrupoCodigo)',
+            'partition_by' => '',
+            'date_column' => 'updated_at',
+        ],
+        'produto_lmc_lmp' => [
+            'columns' => [
+                'id' => 'UInt64',
+                'empresaCodigo' => 'UInt64',
+                'produtoLmcCodigo' => 'UInt64',
+                'sequencia' => 'UInt64',
+                'descricao' => 'String',
+                'tipoCombustivel' => 'String',
+                'geraLmcLmp' => 'String',
+                'created_at' => 'DateTime',
+                'updated_at' => 'DateTime',
+            ],
+            'order_by' => '(empresaCodigo, produtoLmcCodigo)',
+            'partition_by' => '',
+            'date_column' => 'updated_at',
+        ],
         'funcionario_funcoes' => [
             'columns' => [
                 'id' => 'UInt64',
@@ -608,6 +705,38 @@ class ClickHouseTableCatalog
                 'updated_at' => 'DateTime',
             ],
             'order_by' => '(formaPagamentoCodigo, empresaCodigo)',
+            'partition_by' => '',
+            'date_column' => 'updated_at',
+        ],
+        'cliente_empresas' => [
+            'columns' => [
+                'id' => 'UInt64',
+                'empresaCodigo' => 'UInt64',
+                'clienteCodigo' => 'UInt64',
+                'ativoInativo' => 'UInt8',
+                'usaPrazo' => 'UInt8',
+                'codigo' => 'UInt64',
+                'created_at' => 'DateTime',
+                'updated_at' => 'DateTime',
+            ],
+            'order_by' => '(empresaCodigo, clienteCodigo)',
+            'partition_by' => '',
+            'date_column' => 'updated_at',
+        ],
+        'pdvs' => [
+            'columns' => [
+                'id' => 'UInt64',
+                'empresaCodigo' => 'UInt64',
+                'pdvCodigo' => 'UInt64',
+                'codigo' => 'UInt64',
+                'pdv' => 'String',
+                'pdvReferencia' => 'String',
+                'tipo' => 'String',
+                'ativo' => 'String',
+                'created_at' => 'DateTime',
+                'updated_at' => 'DateTime',
+            ],
+            'order_by' => '(empresaCodigo, pdvCodigo)',
             'partition_by' => '',
             'date_column' => 'updated_at',
         ],
@@ -754,6 +883,72 @@ class ClickHouseTableCatalog
                 'updated_at' => 'DateTime',
             ],
             'order_by' => '(administradoraCodigo, empresaCodigo)',
+            'partition_by' => '',
+            'date_column' => 'updated_at',
+        ],
+        'vales_funcionario' => [
+            'columns' => [
+                'id' => 'UInt64',
+                'empresaCodigo' => 'UInt64',
+                'funcionarioCreditoCodigo' => 'UInt64',
+                'funcionarioCodigo' => 'UInt64',
+                'funcionarioReferencia' => 'String',
+                'caixaCodigo' => 'UInt64',
+                'codigo' => 'UInt64',
+                'data' => 'DateTime',
+                'descricao' => 'String',
+                'origem' => 'String',
+                'quitado' => 'UInt8',
+                'turno' => 'UInt64',
+                'valor' => 'Decimal(24,8)',
+                'created_at' => 'DateTime',
+                'updated_at' => 'DateTime',
+            ],
+            'order_by' => '(empresaCodigo, funcionarioCreditoCodigo)',
+            'partition_by' => 'toYYYYMM(data)',
+            'date_column' => 'data',
+        ],
+        'movimentos_conta' => [
+            'columns' => [
+                'id' => 'UInt64',
+                'empresaCodigo' => 'UInt64',
+                'movimentoContaCodigo' => 'UInt64',
+                'contaCodigo' => 'UInt64',
+                'centroCustoCodigo' => 'UInt64',
+                'planoContaGerencialCodigo' => 'UInt64',
+                'codigo' => 'UInt64',
+                'codigoTipoDocumentoOrigem' => 'UInt64',
+                'documentoOrigemCodigo' => 'UInt64',
+                'codigoPessoa' => 'UInt64',
+                'conciliado' => 'UInt8',
+                'daraHoraConciliacao' => 'DateTime',
+                'dataMovimento' => 'DateTime',
+                'evento' => 'DateTime',
+                'descricao' => 'String',
+                'documento' => 'String',
+                'tipo' => 'String',
+                'tipoDocumentoOrigem' => 'String',
+                'tipoPessoa' => 'String',
+                'usuarioConciliacao' => 'String',
+                'valor' => 'Decimal(24,8)',
+                'created_at' => 'DateTime',
+                'updated_at' => 'DateTime',
+            ],
+            'order_by' => '(empresaCodigo, dataMovimento, movimentoContaCodigo)',
+            'partition_by' => 'toYYYYMM(dataMovimento)',
+            'date_column' => 'dataMovimento',
+        ],
+        'centros_custo' => [
+            'columns' => [
+                'id' => 'UInt64',
+                'centroCustoCodigo' => 'UInt64',
+                'codigo' => 'UInt64',
+                'descricao' => 'String',
+                'tipoCentroCusto' => 'String',
+                'created_at' => 'DateTime',
+                'updated_at' => 'DateTime',
+            ],
+            'order_by' => '(centroCustoCodigo)',
             'partition_by' => '',
             'date_column' => 'updated_at',
         ],

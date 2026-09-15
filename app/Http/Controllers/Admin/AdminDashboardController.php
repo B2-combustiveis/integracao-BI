@@ -3,23 +3,23 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\ReloadValidatedWebPostoTable;
+use App\Models\IntegrationService;
+use App\Models\WebPostoCredential;
+use App\Models\WebPostoInitialSyncRun;
+use App\Models\WebPostoReloadRun;
 use App\Services\Admin\AdminOverviewService;
 use Illuminate\Http\JsonResponse;
-use Illuminate\View\View;
-use App\Models\IntegrationService;
-use App\Jobs\ReloadValidatedWebPostoTable;
-use App\Models\WebPostoReloadRun;
-use App\Models\WebPostoInitialSyncRun;
-use App\Models\WebPostoCredential;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\View\View;
 
 class AdminDashboardController extends Controller
 {
-    public function index(AdminOverviewService $overview): View
+    public function index(): View
     {
-        return view('admin.dashboard', ['overview' => $overview->get()]);
+        return view('admin.dashboard');
     }
 
     public function webposto(AdminOverviewService $overview): View
@@ -27,13 +27,43 @@ class AdminDashboardController extends Controller
         return view('admin.webposto', ['overview' => $overview->get()]);
     }
 
+    public function alterdata(): View
+    {
+        return view('admin.alterdata');
+    }
+
+    public function alterdataCompanies(): JsonResponse
+    {
+        $companies = DB::connection('alterdata')->table('empresas')
+            ->orderByDesc('ativa')
+            ->orderBy('nome')
+            ->get([
+                'alterdata_id', 'externo_id', 'nome', 'ativa', 'cpf_cnpj',
+                'endereco', 'ultima_consulta_em',
+            ]);
+
+        return response()->json([
+            'companies' => $companies,
+            'summary' => [
+                'total' => $companies->count(),
+                'active' => $companies->where('ativa', 1)->count(),
+                'inactive' => $companies->where('ativa', 0)->count(),
+            ],
+        ]);
+    }
+
     public function overview(Request $request, AdminOverviewService $overview): JsonResponse
     {
-        $empresa = $request->validate([
+        $validated = $request->validate([
+            'source' => ['required', 'in:webposto,alterdata'],
             'empresa_codigo' => ['nullable', 'integer', 'min:1'],
-        ])['empresa_codigo'] ?? null;
+        ]);
+        $empresa = $validated['empresa_codigo'] ?? null;
 
-        return response()->json($overview->get($empresa ? (int) $empresa : null));
+        return response()->json($overview->get(
+            $validated['source'],
+            $empresa ? (int) $empresa : null,
+        ));
     }
 
     public function services(): View
@@ -83,11 +113,14 @@ class AdminDashboardController extends Controller
         abort_if($initialLoadRunning, 422, 'A carga inicial desta empresa esta em andamento.');
         $running = WebPostoReloadRun::query()->where('empresa_codigo', $empresa)
             ->where('resource', $table)->whereIn('status', ['queued', 'running'])->exists();
-        if ($running) return back()->with('status', 'A recarga de '.$table.' ja esta aguardando ou executando.');
+        if ($running) {
+            return back()->with('status', 'A recarga de '.$table.' ja esta aguardando ou executando.');
+        }
         $run = WebPostoReloadRun::query()->create([
             'empresa_codigo' => $empresa, 'resource' => $table, 'status' => 'queued', 'processed_tables' => [],
         ]);
         ReloadValidatedWebPostoTable::dispatch($run->id);
+
         return back()->with('status', 'Recarga de '.$table.' adicionada a fila.');
     }
 }

@@ -40,7 +40,7 @@ class IntegrationServiceController extends Controller
     public function status(): JsonResponse
     {
         $serviceQuery = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync']);
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync', 'alterdata-sync']);
         $serviceIds = (clone $serviceQuery)->pluck('id');
 
         $serviceModels = $serviceQuery
@@ -114,7 +114,7 @@ class IntegrationServiceController extends Controller
     public function clearCompleted(): RedirectResponse
     {
         $serviceIds = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync'])
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync', 'alterdata-sync'])
             ->pluck('id');
         $deleted = IntegrationServiceRun::query()
             ->whereIn('integration_service_id', $serviceIds)

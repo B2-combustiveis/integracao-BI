@@ -83,6 +83,25 @@ return [
             ]) : [],
         ],
 
+        'alterdata' => [
+            'driver' => 'mysql',
+            'host' => env('DB_ALTERDATA_HOST', env('DB_WEBPOSTO_HOST', 'db')),
+            'port' => env('DB_ALTERDATA_PORT', env('DB_WEBPOSTO_PORT', '3306')),
+            'database' => env('DB_ALTERDATA_DATABASE', 'alterdata'),
+            'username' => env('DB_ALTERDATA_USERNAME', env('DB_WEBPOSTO_USERNAME', 'integracao')),
+            'password' => env('DB_ALTERDATA_PASSWORD', env('DB_WEBPOSTO_PASSWORD', '')),
+            'unix_socket' => '',
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+            ]) : [],
+        ],
+
         'bi' => [
             'driver' => 'mysql',
             'host' => env('DB_BI_HOST', 'db'),

@@ -15,17 +15,21 @@ class AdminOverviewService
 {
     public function __construct(
         private readonly WebPostoNewRecordsResourceCatalog $newRecordsResourceCatalog,
-    ) {
-    }
+    ) {}
 
-    public function get(?int $empresaCodigo = null): array
+    public function get(string $source = 'webposto', ?int $empresaCodigo = null): array
     {
+        if ($source === 'alterdata') {
+            return $this->alterdataOverview();
+        }
+
         $tables = $this->tables($empresaCodigo);
         $bases = $this->webPostoBaseCounts();
         $connections = collect(['mysql' => 'Integração', 'webposto' => 'WebPosto', 'bi' => 'BI'])
             ->map(fn (string $label, string $connection): array => $this->connection($connection, $label))->values()->all();
 
         return [
+            'source' => 'webposto',
             'generated_at' => now()->toIso8601String(),
             'connections' => $connections,
             'summary' => [
@@ -39,6 +43,60 @@ class AdminOverviewService
             'reloads' => $this->reloads(),
             'selected_company' => $empresaCodigo,
         ];
+    }
+
+    private function alterdataOverview(): array
+    {
+        $tables = $this->databaseTables('alterdata');
+
+        return [
+            'source' => 'alterdata',
+            'generated_at' => now()->toIso8601String(),
+            'connections' => collect(['mysql' => 'Integração', 'alterdata' => 'Alterdata'])
+                ->map(fn (string $label, string $connection): array => $this->connection($connection, $label))
+                ->values()->all(),
+            'summary' => [
+                'companies' => $this->safeCount('alterdata', 'empresas'),
+                'employees' => $this->safeCount('alterdata', 'funcionarios'),
+                'tables' => count($tables),
+                'api_tokens' => filled(config('services.alterdata.token')) ? 1 : 0,
+            ],
+            'credentials' => [],
+            'tables' => $tables,
+            'reloads' => [],
+            'selected_company' => null,
+        ];
+    }
+
+    private function databaseTables(string $connection): array
+    {
+        try {
+            $database = DB::connection($connection)->getDatabaseName();
+
+            return DB::connection($connection)->table('information_schema.TABLES')
+                ->where('TABLE_SCHEMA', $database)
+                ->where('TABLE_TYPE', 'BASE TABLE')
+                ->orderBy('TABLE_NAME')
+                ->get(['TABLE_NAME', 'DATA_LENGTH', 'INDEX_LENGTH'])
+                ->map(function (object $row) use ($connection): array {
+                    $table = $row->TABLE_NAME;
+                    $columns = Schema::connection($connection)->getColumnListing($table);
+                    $query = DB::connection($connection)->table($table);
+
+                    return [
+                        'name' => $table,
+                        'records' => (clone $query)->count(),
+                        'columns' => count($columns),
+                        'last_update' => in_array('updated_at', $columns, true)
+                            ? (clone $query)->max('updated_at')
+                            : null,
+                        'size_bytes' => (int) $row->DATA_LENGTH + (int) $row->INDEX_LENGTH,
+                        'new_records_sync' => false,
+                    ];
+                })->all();
+        } catch (Throwable) {
+            return [];
+        }
     }
 
     /** @return array{base_1: int, base_2: int} */
@@ -73,6 +131,7 @@ class AdminOverviewService
         $started = hrtime(true);
         try {
             DB::connection($connection)->select('select 1');
+
             return ['key' => $connection, 'label' => $label, 'status' => 'online', 'database' => DB::connection($connection)->getDatabaseName(), 'latency_ms' => round((hrtime(true) - $started) / 1_000_000, 2)];
         } catch (Throwable $e) {
             return ['key' => $connection, 'label' => $label, 'status' => 'offline', 'database' => config("database.connections.{$connection}.database"), 'latency_ms' => null, 'error' => class_basename($e)];
@@ -90,6 +149,7 @@ class AdminOverviewService
             $rows = DB::connection('webposto')->table('information_schema.TABLES')
                 ->where('TABLE_SCHEMA', $database)->where('TABLE_TYPE', 'BASE TABLE')
                 ->orderBy('TABLE_NAME')->get(['TABLE_NAME', 'DATA_LENGTH', 'INDEX_LENGTH']);
+
             return $rows->map(function (object $row) use ($newRecordsTables, $empresaCodigo): array {
                 $table = $row->TABLE_NAME;
                 $columns = Schema::connection('webposto')->getColumnListing($table);
@@ -99,6 +159,7 @@ class AdminOverviewService
                 }
                 $updated = in_array('updated_at', $columns, true)
                     ? (clone $query)->max('updated_at') : null;
+
                 return ['name' => $table, 'records' => (clone $query)->count(),
                     'columns' => count($columns), 'last_update' => $updated,
                     'size_bytes' => (int) $row->DATA_LENGTH + (int) $row->INDEX_LENGTH,
@@ -178,7 +239,10 @@ class AdminOverviewService
     {
         try {
             $query = DB::connection($connection)->table($table);
-            foreach ($where as $field => $value) $query->where($field, $value);
+            foreach ($where as $field => $value) {
+                $query->where($field, $value);
+            }
+
             return $query->count();
         } catch (Throwable) {
             return 0;

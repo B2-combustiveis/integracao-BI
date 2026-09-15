@@ -1,10 +1,10 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\AdminSessionController;
 use App\Http\Controllers\Admin\IntegrationServiceController;
 use App\Http\Controllers\Admin\WebPostoCredentialController;
+use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     return view('welcome');
@@ -26,6 +26,8 @@ Route::middleware('guest')->group(function (): void {
 Route::prefix('admin')->middleware('auth.admin-session')->group(function (): void {
     Route::get('/', [AdminDashboardController::class, 'index'])->name('admin.dashboard');
     Route::get('/webposto', [AdminDashboardController::class, 'webposto'])->name('admin.webposto');
+    Route::get('/alterdata', [AdminDashboardController::class, 'alterdata'])->name('admin.alterdata');
+    Route::get('/alterdata/companies', [AdminDashboardController::class, 'alterdataCompanies'])->name('admin.alterdata.companies');
     Route::get('/services', [AdminDashboardController::class, 'services'])->name('admin.services');
     Route::post('/credentials', [WebPostoCredentialController::class, 'store'])->name('admin.credentials.store');
     Route::post('/credentials/{empresa}/synchronize', [WebPostoCredentialController::class, 'synchronize'])->name('admin.credentials.synchronize');

@@ -12,6 +12,10 @@
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.6" stroke="currentColor" stroke-width="1.8"/><rect x="3" y="14" width="18" height="6" rx="1.6" stroke="currentColor" stroke-width="1.8"/><circle cx="7" cy="7" r="1" fill="currentColor"/><circle cx="7" cy="17" r="1" fill="currentColor"/></svg>
         WebPosto
     </a>
+    <a class="nav-item {{ $active === 'alterdata' ? 'active' : '' }}" href="{{ route('admin.alterdata') }}">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5v-11Z" stroke="currentColor" stroke-width="1.8"/><path d="M8 15.5V12m4 3.5V8.5m4 7v-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        Alterdata
+    </a>
     <a class="nav-item {{ $active === 'services' ? 'active' : '' }}" href="{{ route('admin.services') }}">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5-9-5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m3 13 9 5 9-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Serviços
