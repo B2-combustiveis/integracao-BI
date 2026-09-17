@@ -492,6 +492,45 @@ class WebPostoCursorSynchronizerTest extends TestCase
         $this->assertFalse($control->metadata['resume_available']);
     }
 
+    public function test_a_cancelled_cursor_can_resume_from_its_last_confirmed_checkpoint(): void
+    {
+        WebPostoSyncControl::query()->create([
+            'empresa_codigo' => 4604,
+            'endpoint' => '/INTEGRACAO/VENDA:cancelled-resume-test',
+            'strategy' => 'A',
+            'last_code' => 75,
+            'status' => 'idle',
+            'metadata' => [
+                'cursor_value' => 75,
+                'checkpoint_cursor' => 75,
+                'checkpoint_page' => 8,
+                'resume_available' => true,
+            ],
+        ]);
+        $querySent = null;
+        $this->mock(WebPostoClient::class, function (MockInterface $mock) use (&$querySent): void {
+            $mock->shouldReceive('get')->once()->andReturnUsing(
+                function (string $endpoint, int $empresa, array $query) use (&$querySent): array {
+                    $querySent = $query;
+
+                    return $this->httpResult(['ultimoCodigo' => 75, 'resultados' => []]);
+                },
+            );
+        });
+
+        app(WebPostoCursorSynchronizer::class)->synchronize(
+            endpoint: '/INTEGRACAO/VENDA',
+            empresaCodigo: 4604,
+            persist: fn (): array => [],
+            query: ['limite' => 1000],
+            cursor: ['initial_value' => 1, 'prefer_initial_value' => true],
+            controlKey: '/INTEGRACAO/VENDA:cancelled-resume-test',
+            resumeFromCheckpoint: true,
+        );
+
+        $this->assertSame(75, $querySent['ultimoCodigo']);
+    }
+
     /** @param array<string, mixed> $payload */
     private function httpResult(array $payload): array
     {

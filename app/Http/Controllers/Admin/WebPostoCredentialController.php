@@ -10,6 +10,7 @@ use App\Models\WebPostoReloadRun;
 use App\Services\WebPosto\WebPostoCredentialRegistrationService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Throwable;
 
 class WebPostoCredentialController extends Controller
@@ -41,6 +42,19 @@ class WebPostoCredentialController extends Controller
             ->where('empresa_codigo', $empresa)
             ->firstOrFail();
 
+        if ($credential->base === WebPostoCredential::BASE_B1) {
+            $b1CompanyCodes = WebPostoCredential::query()
+                ->where('base', WebPostoCredential::BASE_B1)
+                ->pluck('empresa_codigo');
+            $b1Running = WebPostoInitialSyncRun::query()
+                ->whereIn('empresa_codigo', $b1CompanyCodes)
+                ->whereIn('status', ['queued', 'running'])
+                ->count();
+            if ($b1Running >= 5) {
+                return back()->with('status', 'O limite de cinco postos B1 em sincronização foi atingido. Aguarde uma vaga.');
+            }
+        }
+
         $running = WebPostoInitialSyncRun::query()
             ->where('empresa_codigo', $empresa)
             ->whereIn('status', ['queued', 'running'])
@@ -69,12 +83,19 @@ class WebPostoCredentialController extends Controller
             ]);
         }
 
+        $wasSynchronized = $credential->implantacao_status === WebPostoCredential::STATUS_SINCRONIZADO;
+        $previous = $wasSynchronized ? null : WebPostoInitialSyncRun::query()
+            ->where('empresa_codigo', $empresa)
+            ->whereIn('status', ['failed', 'cancelled'])
+            ->latest('id')
+            ->first();
         $run = WebPostoInitialSyncRun::query()->create([
             'empresa_codigo' => $empresa,
+            'batch_key' => $credential->base === WebPostoCredential::BASE_B1 ? (string) Str::uuid() : null,
             'status' => 'queued',
-            'total_resources' => count(SyncWebPostoCompanyInitialLoad::RESOURCES),
-            'completed_resources' => [],
-            'was_synchronized' => $credential->implantacao_status === WebPostoCredential::STATUS_SINCRONIZADO,
+            'total_resources' => count(SyncWebPostoCompanyInitialLoad::requiredResourcesFor((string) $credential->base)),
+            'completed_resources' => array_values(array_unique($previous?->completed_resources ?? [])),
+            'was_synchronized' => $wasSynchronized,
         ]);
         SyncWebPostoCompanyInitialLoad::dispatch($run->id);
 

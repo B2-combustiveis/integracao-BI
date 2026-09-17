@@ -9,8 +9,7 @@ class ClienteEmpresaImporter
     public function import(mixed $payload, int $empresaCodigo): array
     {
         $resultados = is_array($payload) && is_array($payload['resultados'] ?? null) ? $payload['resultados'] : [];
-        $validos = collect($resultados)->filter(fn (mixed $item): bool =>
-            is_array($item) && isset($item['empresaCodigo'], $item['clienteCodigo'])
+        $validos = collect($resultados)->filter(fn (mixed $item): bool => is_array($item) && isset($item['empresaCodigo'], $item['clienteCodigo'])
             && is_numeric($item['empresaCodigo']) && is_numeric($item['clienteCodigo'])
             && (int) $item['empresaCodigo'] === $empresaCodigo
         )->unique(fn (array $item): string => (int) $item['empresaCodigo'].'-'.(int) $item['clienteCodigo'])->values();
@@ -43,12 +42,42 @@ class ClienteEmpresaImporter
             $chave = $dados['empresaCodigo'].'-'.$dados['clienteCodigo'];
             $existente = $existentes->get($chave);
             if ($existente === null) {
-                $connection->table('cliente_empresas')->insert([...$dados, 'created_at' => $agora, 'updated_at' => $agora]);
-                $inserted++;
+                // Outra execução pode gravar o mesmo vínculo entre a leitura acima
+                // e este ponto. insertOrIgnore mantém a chave única como árbitro e
+                // evita que uma corrida derrube toda a sincronização.
+                $created = $connection->table('cliente_empresas')->insertOrIgnore([
+                    ...$dados,
+                    'created_at' => $agora,
+                    'updated_at' => $agora,
+                ]);
+                if ($created === 1) {
+                    $inserted++;
+
+                    continue;
+                }
+
+                $existente = $connection->table('cliente_empresas')
+                    ->where('empresaCodigo', $dados['empresaCodigo'])
+                    ->where('clienteCodigo', $dados['clienteCodigo'])
+                    ->first();
+                if ($existente !== null && ! $this->changed($existente, $dados)) {
+                    $unchanged++;
+
+                    continue;
+                }
+                if ($existente !== null) {
+                    $connection->table('cliente_empresas')
+                        ->where('empresaCodigo', $dados['empresaCodigo'])
+                        ->where('clienteCodigo', $dados['clienteCodigo'])
+                        ->update([...$dados, 'updated_at' => $agora]);
+                    $updated++;
+                }
+
                 continue;
             }
             if (! $this->changed($existente, $dados)) {
                 $unchanged++;
+
                 continue;
             }
             $connection->table('cliente_empresas')->where('empresaCodigo', $dados['empresaCodigo'])
@@ -56,6 +85,7 @@ class ClienteEmpresaImporter
             $updated++;
         }
         $missing = $validos->count() - $comCliente->count();
+
         return [
             'database' => 'webposto', 'table' => 'cliente_empresas',
             'sync_status' => $this->status($inserted, $updated, $unchanged, $comCliente->count()),
@@ -67,13 +97,21 @@ class ClienteEmpresaImporter
 
     private function changed(object $existing, array $data): bool
     {
-        foreach ($data as $field => $value) if (($existing->{$field} ?? null) != $value) return true;
+        foreach ($data as $field => $value) {
+            if (($existing->{$field} ?? null) != $value) {
+                return true;
+            }
+        }
+
         return false;
     }
 
     private function status(int $i, int $u, int $n, int $valid): string
     {
-        if ($valid === 0) return 'no_valid_records';
+        if ($valid === 0) {
+            return 'no_valid_records';
+        }
+
         return $i > 0 || $u > 0 ? 'synchronized' : ($n > 0 ? 'already_synchronized' : 'no_valid_records');
     }
 }

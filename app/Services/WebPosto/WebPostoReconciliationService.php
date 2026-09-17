@@ -483,6 +483,7 @@ class WebPostoReconciliationService
     private function usesLimitedReconciliationWindow(string $resource): bool
     {
         return str_starts_with($resource, 'webposto-chimba-reconciliation')
+            || str_starts_with($resource, 'webposto-b1-reconciliation')
             || str_starts_with($resource, 'webposto-b2-reconciliation');
     }
 

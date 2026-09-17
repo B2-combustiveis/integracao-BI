@@ -297,6 +297,9 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
 
     public function test_new_records_dispatches_one_job_per_company_and_aggregates_the_run(): void
     {
+        DB::connection('webposto')->table('webposto_credentials')
+            ->where('empresa_codigo', 4604)
+            ->update(['base' => 'b2']);
         DB::connection('webposto')->table('empresas')->insert([
             'empresaCodigo' => 9999,
             'fantasia' => 'Segundo Posto',
@@ -306,6 +309,7 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
             'empresa_codigo' => 9999,
             'base_url' => 'https://second.example.test',
             'token' => 'second-test-token',
+            'base' => 'b2',
             'implantacao_status' => 'sincronizado',
             'ativo' => true,
             'created_at' => now(),
@@ -460,6 +464,31 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
         );
     }
 
+    public function test_new_records_ignores_b1_even_when_the_company_is_synchronized(): void
+    {
+        $service = IntegrationService::query()->create([
+            'name' => 'B1 excluded from new records test',
+            'slug' => 'b1-excluded-new-records-'.str()->uuid(),
+            'category' => 'cadastros',
+            'resource' => 'webposto-new-records',
+            'empresa_codigo' => 4604,
+            'frequency_minutes' => 5,
+            'settings' => ['resources' => ['strict']],
+        ]);
+        $this->serviceIds[] = $service->id;
+
+        Queue::fake([SyncWebPostoCompanyNewRecords::class]);
+        (new SyncWebPostoNewRecords($service->id))->handle();
+
+        Queue::assertNotPushed(SyncWebPostoCompanyNewRecords::class);
+        $run = IntegrationServiceRun::query()
+            ->where('integration_service_id', $service->id)
+            ->latest('id')
+            ->firstOrFail();
+        $this->assertSame('failed', $run->status);
+        $this->assertSame('Nenhum posto sincronizado e ativo foi encontrado.', $run->error);
+    }
+
     public function test_each_dispatch_has_only_one_attempt_and_therefore_one_report(): void
     {
         $this->assertSame(1, (new SyncWebPostoNewRecords(123))->tries);
@@ -479,6 +508,9 @@ class WebPostoNewRecordsSyncServiceTest extends TestCase
 
     public function test_a_failure_does_not_erase_progress_already_recorded_by_resources(): void
     {
+        DB::connection('webposto')->table('webposto_credentials')
+            ->where('empresa_codigo', 4604)
+            ->update(['base' => 'b2']);
         $service = IntegrationService::query()->create([
             'name' => 'Partial progress test',
             'slug' => 'partial-progress-'.str()->uuid(),

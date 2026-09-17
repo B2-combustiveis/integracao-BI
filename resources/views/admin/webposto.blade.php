@@ -57,7 +57,7 @@ function refreshOverview({silent=false,force=false}={}){
 
     const request=(async()=>{
         try{
-            const response=await fetch(@json(route('admin.overview')),{headers:{Accept:'application/json'},cache:'no-store',signal:controller.signal});
+            const response=await fetch(@json(route('admin.overview', ['source' => 'webposto'])),{headers:{Accept:'application/json'},cache:'no-store',signal:controller.signal});
             if(!response.ok)throw new Error('Falha ao atualizar o painel.');
             const data=await response.json();
             if(controller.signal.aborted)return false;

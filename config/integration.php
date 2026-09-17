@@ -2,6 +2,7 @@
 
 return [
     'webposto' => [
+        'b1_token' => env('B1_TOKEN'),
         'connect_timeout' => (int) env('WEBPOSTO_CONNECT_TIMEOUT', 5),
         'timeout' => (int) env('WEBPOSTO_TIMEOUT', 90),
         'request_interval_ms' => (int) env('WEBPOSTO_REQUEST_INTERVAL_MS', 350),

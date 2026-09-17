@@ -2,8 +2,8 @@
 
 namespace App\Services\Integration;
 
-use App\Jobs\SyncClickHouseIncremental;
 use App\Jobs\SyncAlterdata;
+use App\Jobs\SyncClickHouseIncremental;
 use App\Jobs\SyncWebPostoDatabase;
 use App\Jobs\SyncWebPostoNewRecords;
 use App\Jobs\SyncWebPostoReconciliation;
@@ -16,7 +16,7 @@ class IntegrationServiceDispatcher
     {
         $ids = IntegrationService::query()->where('active', true)
             ->where(fn ($query) => $query->whereNull('next_run_at')->orWhere('next_run_at', '<=', now()))
-            ->orderByRaw("CASE WHEN resource IN ('webposto-chimba-reconciliation', 'webposto-b2-reconciliation') THEN 0 ELSE 1 END")
+            ->orderByRaw("CASE WHEN resource IN ('webposto-chimba-reconciliation', 'webposto-b1-reconciliation', 'webposto-b2-reconciliation') THEN 0 ELSE 1 END")
             ->pluck('id');
         $dispatched = 0;
         foreach ($ids as $id) {
@@ -31,6 +31,16 @@ class IntegrationServiceDispatcher
         return DB::transaction(function () use ($serviceId): bool {
             $service = IntegrationService::query()->lockForUpdate()->findOrFail($serviceId);
             $coordinator = app(WebPostoReconciliationCoordinator::class);
+            $alreadyRunning = $service->runs()
+                ->whereIn('status', ['running', 'finalizing'])
+                ->exists();
+            if ($alreadyRunning) {
+                // Mantém o acionamento vencido. O scheduler tentará novamente
+                // quando a execução atual terminar, sem criar rodadas sobrepostas.
+                $service->update(['next_run_at' => now()]);
+
+                return false;
+            }
             if ($service->resource === 'webposto-new-records' && $coordinator->newRecordsAreSuspended()) {
                 return false;
             }
@@ -50,6 +60,7 @@ class IntegrationServiceDispatcher
                 'webposto-database-changes' => SyncWebPostoDatabase::dispatch($service->id),
                 'webposto-new-records' => SyncWebPostoNewRecords::dispatch($service->id),
                 'webposto-chimba-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id)->onQueue(SyncWebPostoReconciliation::CHIMBA_QUEUE),
+                'webposto-b1-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id),
                 'webposto-b2-reconciliation' => SyncWebPostoReconciliation::dispatch($service->id),
                 'clickhouse-incremental-sync' => SyncClickHouseIncremental::dispatch($service->id),
                 'alterdata-sync' => SyncAlterdata::dispatch($service->id),

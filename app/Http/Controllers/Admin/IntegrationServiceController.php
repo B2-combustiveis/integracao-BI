@@ -4,14 +4,16 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\IntegrationService;
+use App\Models\IntegrationServiceCompanyRun;
 use App\Models\IntegrationServiceRun;
+use App\Services\Integration\IntegrationRunXlsxExporter;
 use App\Services\Integration\IntegrationServiceDispatcher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
-use App\Services\Integration\IntegrationRunXlsxExporter;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class IntegrationServiceController extends Controller
@@ -19,12 +21,14 @@ class IntegrationServiceController extends Controller
     public function pause(IntegrationService $service): RedirectResponse
     {
         $service->update(['active' => false, 'next_run_at' => null]);
+
         return back()->with('status', 'Servico pausado.');
     }
 
     public function resume(IntegrationService $service): RedirectResponse
     {
         $service->update(['active' => true, 'next_run_at' => now()]);
+
         return back()->with('status', 'Servico ativado.');
     }
 
@@ -40,7 +44,7 @@ class IntegrationServiceController extends Controller
     public function status(): JsonResponse
     {
         $serviceQuery = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync', 'alterdata-sync']);
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b1-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync', 'alterdata-sync']);
         $serviceIds = (clone $serviceQuery)->pluck('id');
 
         $serviceModels = $serviceQuery
@@ -66,29 +70,31 @@ class IntegrationServiceController extends Controller
             )->all())->all();
 
         $services = $serviceModels->map(function (IntegrationService $service) use ($newRecordsByRun): array {
-                $run = $service->runs->first();
-                return [
-                    'id' => $service->id,
-                    'name' => $service->name,
-                    'resource' => $service->resource,
-                    'active' => $service->active,
-                    'frequency_minutes' => $service->frequency_minutes,
-                    'next_run_at' => $service->next_run_at?->toIso8601String(),
-                    'run' => $run ? $this->runData($run, $newRecordsByRun[$run->id] ?? []) : null,
-                ];
-            });
+            $run = $service->runs->first();
+
+            return [
+                'id' => $service->id,
+                'name' => $service->name,
+                'resource' => $service->resource,
+                'active' => $service->active,
+                'frequency_minutes' => $service->frequency_minutes,
+                'next_run_at' => $service->next_run_at?->toIso8601String(),
+                'run' => $run ? $this->runData($run, $newRecordsByRun[$run->id] ?? []) : null,
+            ];
+        });
 
         $completed = $completedRuns->map(fn (IntegrationServiceRun $run): array => [
-                ...$this->runData($run, $newRecordsByRun[$run->id] ?? []),
-                'service_id' => $run->integration_service_id,
-                'service_name' => $run->service->name,
-                'service_resource' => $run->service->resource,
-                'export_url' => route('admin.services.runs.export', [$run->service, $run]),
-            ]);
+            ...$this->runData($run, $newRecordsByRun[$run->id] ?? []),
+            'service_id' => $run->integration_service_id,
+            'service_name' => $run->service->name,
+            'service_resource' => $run->service->resource,
+            'export_url' => route('admin.services.runs.export', [$run->service, $run]),
+        ]);
 
         $jobs = Schema::hasTable('jobs') ? DB::table('jobs')->orderBy('id')->get()
             ->map(function (object $job): array {
                 $payload = json_decode($job->payload, true);
+
                 return [
                     'id' => $job->id,
                     'queue' => $job->queue,
@@ -114,7 +120,7 @@ class IntegrationServiceController extends Controller
     public function clearCompleted(): RedirectResponse
     {
         $serviceIds = IntegrationService::query()
-            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync', 'alterdata-sync'])
+            ->whereIn('resource', ['webposto-new-records', 'webposto-database-changes', 'webposto-chimba-reconciliation', 'webposto-b1-reconciliation', 'webposto-b2-reconciliation', 'clickhouse-incremental-sync', 'alterdata-sync'])
             ->pluck('id');
         $deleted = IntegrationServiceRun::query()
             ->whereIn('integration_service_id', $serviceIds)
@@ -137,10 +143,10 @@ class IntegrationServiceController extends Controller
         IntegrationService $service,
         IntegrationServiceRun $run,
         IntegrationRunXlsxExporter $exporter,
-    ): BinaryFileResponse
-    {
+    ): BinaryFileResponse {
         abort_unless($run->integration_service_id === $service->id, 404);
         $filename = sprintf('service-%d-execucao-%d-%s.xlsx', $service->id, $run->id, $run->started_at?->format('Ymd-His') ?? 'sem-data');
+
         return response()->download(
             $exporter->create($run),
             $filename,
@@ -181,7 +187,7 @@ class IntegrationServiceController extends Controller
      * para paralelizar e isolar falhas por bloco, mas a tela so deve mostrar
      * progresso por posto, nao por bloco/tabela.
      *
-     * @param \Illuminate\Support\Collection<int, \App\Models\IntegrationServiceCompanyRun> $blocks
+     * @param  Collection<int, IntegrationServiceCompanyRun>  $blocks
      * @return array<string, mixed>
      */
     private function aggregateCompanyBlocks($blocks): array
@@ -208,7 +214,7 @@ class IntegrationServiceController extends Controller
         return [
             'empresa_codigo' => $shared ? null : $first->empresa_codigo,
             'empresa_nome' => $shared
-                ? $first->empresa_nome
+                ? Str::before((string) $first->empresa_nome, ' ·').' compartilhado'
                 : ($multiBlock ? Str::beforeLast($first->empresa_nome, ' · ') : $first->empresa_nome),
             'position' => $blocks->min('position'),
             'status' => $status,
@@ -235,7 +241,7 @@ class IntegrationServiceController extends Controller
      * Junta a tabela/ultimo-codigo de cada bloco em andamento numa unica string,
      * pra nao perder a visibilidade granular so porque os blocos viraram 1 linha.
      *
-     * @param \Illuminate\Support\Collection<int, \App\Models\IntegrationServiceCompanyRun> $blocks
+     * @param  Collection<int, IntegrationServiceCompanyRun>  $blocks
      */
     private function summarizeActiveBlocks($blocks): ?string
     {

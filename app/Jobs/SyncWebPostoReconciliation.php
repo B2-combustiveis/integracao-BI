@@ -78,7 +78,11 @@ class SyncWebPostoReconciliation implements ShouldBeUnique, ShouldQueue
 
         $queue = $service->resource === 'webposto-chimba-reconciliation' ? self::CHIMBA_QUEUE : 'default';
         $resources = (array) ($settings['resources'] ?? []);
-        $sharedResources = $service->resource === 'webposto-b2-reconciliation'
+        $isSharedBaseReconciliation = in_array($service->resource, [
+            'webposto-b1-reconciliation',
+            'webposto-b2-reconciliation',
+        ], true);
+        $sharedResources = $isSharedBaseReconciliation
             ? array_values(array_intersect(self::B2_SHARED_RESOURCES, $resources))
             : [];
         $configuredBlocks = collect($settings['worker_blocks'] ?? [])
@@ -128,7 +132,7 @@ class SyncWebPostoReconciliation implements ShouldBeUnique, ShouldQueue
                 $companyRun = IntegrationServiceCompanyRun::query()->create([
                     'integration_service_run_id' => $run->id,
                     'empresa_codigo' => $credentialCompany,
-                    'empresa_nome' => 'B2 · '.str_replace('_', ' ', $resource).' (compartilhado)',
+                    'empresa_nome' => strtoupper((string) ($settings['scope'] ?? 'base')).' · '.str_replace('_', ' ', $resource).' (compartilhado)',
                     'block_key' => 'shared-'.substr($resource, 0, 30),
                     'position' => ++$position,
                     'status' => 'pending',

@@ -48,6 +48,18 @@ class AdminDashboardTest extends TestCase
         $this->withoutMiddleware(EnsureAdminSession::class)->getJson('/admin/overview?source=clickhouse')->assertUnprocessable();
     }
 
+    public function test_webposto_screen_refreshes_the_webposto_overview(): void
+    {
+        $overview = ['generated_at' => now()->toIso8601String(), 'connections' => [],
+            'summary' => ['base_1' => 74, 'base_2' => 33, 'api_tokens' => 3, 'tables' => 0],
+            'credentials' => [], 'tables' => [], 'reloads' => []];
+        $this->mock(AdminOverviewService::class, fn (MockInterface $mock) => $mock->shouldReceive('get')->once()->with()->andReturn($overview));
+
+        $this->withoutMiddleware(EnsureAdminSession::class)->get('/admin/webposto')
+            ->assertOk()
+            ->assertSee('source=webposto', false);
+    }
+
     public function test_services_screen_is_available(): void
     {
         $this->withoutMiddleware(EnsureAdminSession::class)->get('/admin/services')

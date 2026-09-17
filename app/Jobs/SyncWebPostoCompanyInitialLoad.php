@@ -4,7 +4,6 @@ namespace App\Jobs;
 
 use App\Models\WebPostoCredential;
 use App\Models\WebPostoInitialSyncRun;
-use App\Services\WebPosto\WebPostoInitialLoadRunner;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -13,12 +12,14 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Throwable;
 
-class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
+class SyncWebPostoCompanyInitialLoad implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 1;
+
     public int $timeout = 21600;
+
     public int $uniqueFor = 21600;
 
     /** @var array<int, string> */
@@ -46,7 +47,6 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
         'vendas',
         'titulos_receber',
         'bicos',
-        'cliente_empresas',
         'centros_custo',
         'cartoes',
         'venda_formas_pagamento',
@@ -57,11 +57,33 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
         'funcionario_funcoes',
         'vales_funcionario',
         'caixas_apresentados',
+        'cliente_empresas',
     ];
+
+    /**
+     * Recursos que, pra base B1, ficam de fora do disparo em paralelo da carga
+     * inicial e esperam um gatilho manual (comando webposto:b1-dispatch-deferred).
+     * Hoje so cliente_empresas, porque o endpoint dele e um feed global
+     * compartilhado entre empresas - rodar em paralelo com outro scan do mesmo
+     * feed (ex: durante um lote anterior ainda em andamento) so duplica trabalho.
+     *
+     * @var array<int, string>
+     */
+    public const DEFERRED_B1_RESOURCES = [
+        'cliente_empresas',
+    ];
+
+    /** @return array<int, string> */
+    public static function requiredResourcesFor(string $base): array
+    {
+        return $base === WebPostoCredential::BASE_B1
+            ? array_values(array_diff(self::RESOURCES, self::DEFERRED_B1_RESOURCES))
+            : self::RESOURCES;
+    }
 
     public function __construct(public readonly int $runId)
     {
-        $this->onQueue('default');
+        $this->onQueue('webposto-coordinator');
     }
 
     public function uniqueId(): string
@@ -71,7 +93,7 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
         return 'initial-company-load:'.($run?->empresa_codigo ?? $this->runId);
     }
 
-    public function handle(WebPostoInitialLoadRunner $runner): void
+    public function handle(): void
     {
         $run = WebPostoInitialSyncRun::query()->findOrFail($this->runId);
         $credential = WebPostoCredential::query()
@@ -81,9 +103,10 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
         $wasSynchronized = (bool) $run->was_synchronized
             || $credential->implantacao_status === WebPostoCredential::STATUS_SINCRONIZADO;
         $completed = array_values(array_unique($run->completed_resources ?? []));
+        $required = self::requiredResourcesFor((string) $credential->base);
         $run->update([
             'status' => 'running',
-            'total_resources' => count(self::RESOURCES),
+            'total_resources' => count($required),
             'completed_resources' => $completed,
             'was_synchronized' => $wasSynchronized,
             'started_at' => now(),
@@ -97,50 +120,17 @@ class SyncWebPostoCompanyInitialLoad implements ShouldQueue, ShouldBeUnique
             'carga_inicial_erro' => null,
         ]);
 
-        try {
-            foreach (self::RESOURCES as $position => $resource) {
-                if (in_array($resource, $completed, true)) {
-                    $run->update(['current_position' => $position + 1]);
-                    continue;
-                }
-                $run->update([
-                    'current_resource' => $resource,
-                    'current_position' => $position + 1,
-                ]);
-                $completed = [
-                    ...$completed,
-                    ...$runner->run($run->empresa_codigo, $resource),
-                ];
-                $run->update([
-                    'completed_resources' => array_values(array_unique($completed)),
-                ]);
-            }
-
-            $run->update([
-                'status' => 'success',
-                'current_resource' => null,
-                'finished_at' => now(),
-            ]);
-            $credential->update([
-                'implantacao_status' => WebPostoCredential::STATUS_SINCRONIZADO,
-                'carga_inicial_concluida_em' => now(),
-                'carga_inicial_erro' => null,
-            ]);
-        } catch (Throwable $exception) {
-            $message = mb_substr($exception->getMessage(), 0, 2000);
-            $run->update([
-                'status' => 'failed',
-                'current_resource' => null,
-                'finished_at' => now(),
-                'error' => $message,
-            ]);
-            $credential->update([
-                'implantacao_status' => $wasSynchronized
-                    ? WebPostoCredential::STATUS_SINCRONIZADO
-                    : WebPostoCredential::STATUS_AGUARDANDO_SINCRONIZACAO,
-                'carga_inicial_erro' => $message,
-            ]);
-            throw $exception;
+        // Carga modular em paralelo pra todas as bases - o caminho sequencial
+        // antigo (um unico job de horas, sem resiliencia por recurso) nao
+        // existe mais aqui de proposito: um recurso pesado travando nao deve
+        // mais segurar os outros 33 nem exigir matar o worker inteiro pra sair
+        // do lugar.
+        $run->update([
+            'current_resource' => 'carga modular em paralelo',
+            'current_position' => count(array_intersect($required, $completed)),
+        ]);
+        foreach (array_diff($required, $completed) as $resource) {
+            SyncWebPostoInitialResource::dispatch($run->id, $resource);
         }
     }
 

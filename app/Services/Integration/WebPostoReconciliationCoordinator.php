@@ -10,6 +10,7 @@ class WebPostoReconciliationCoordinator
 {
     private const RECONCILIATION_RESOURCES = [
         'webposto-chimba-reconciliation',
+        'webposto-b1-reconciliation',
         'webposto-b2-reconciliation',
     ];
 

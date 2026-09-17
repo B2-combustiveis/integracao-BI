@@ -3,6 +3,7 @@
 namespace App\Services\WebPosto;
 
 use App\Exceptions\WebPostoSynchronizationCancelled;
+use App\Models\WebPostoInitialSyncRun;
 use App\Models\WebPostoSyncControl;
 use App\Models\WebPostoSyncEndpointRun;
 use Illuminate\Support\Facades\DB;
@@ -59,7 +60,8 @@ class WebPostoCursorSynchronizer
         $metadata = is_array($control->metadata) ? $control->metadata : [];
         $canResume = $resumeFromCheckpoint
             && ! $control->wasRecentlyCreated
-            && $control->status === 'error'
+            && in_array($control->status, ['error', 'idle', 'cancelled'], true)
+            && ($metadata['resume_available'] ?? true) === true
             && (int) $control->last_code > $initialValue;
         $pageOffset = $canResume ? (int) ($metadata['checkpoint_page'] ?? 0) : 0;
         $persistedCursor = is_numeric($metadata['cursor_value'] ?? null)
@@ -238,6 +240,17 @@ class WebPostoCursorSynchronizer
     private function ensureActive(?callable $shouldContinue): void
     {
         if ($shouldContinue !== null && $shouldContinue() !== true) {
+            throw new WebPostoSynchronizationCancelled;
+        }
+
+        // Cargas iniciais executam comandos Artisan no mesmo processo do job.
+        // O contexto abaixo permite que toda paginacao pare assim que a carga
+        // for cancelada, inclusive antes de persistir a resposta da API.
+        $initialRunId = config('integration.runtime.webposto_initial_run_id');
+        if ($initialRunId !== null && ! WebPostoInitialSyncRun::query()
+            ->whereKey((int) $initialRunId)
+            ->where('status', 'running')
+            ->exists()) {
             throw new WebPostoSynchronizationCancelled;
         }
     }

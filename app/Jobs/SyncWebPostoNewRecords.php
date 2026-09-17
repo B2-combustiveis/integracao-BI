@@ -57,7 +57,6 @@ class SyncWebPostoNewRecords implements ShouldBeUnique, ShouldQueue
             ->where('credentials.ativo', true)
             ->where('credentials.implantacao_status', WebPostoCredential::STATUS_SINCRONIZADO)
             ->whereIn('credentials.base', [
-                WebPostoCredential::BASE_B1,
                 WebPostoCredential::BASE_B2,
                 WebPostoCredential::BASE_CHIMBA,
             ])
